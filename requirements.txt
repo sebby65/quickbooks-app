@@ -1,0 +1,7 @@
+Flask
+requests
+pandas
+python-dotenv
+prophet
+matplotlib
+gunicorn
