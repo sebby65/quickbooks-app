@@ -1,36 +1,28 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Payment Form</title>
+  <title>Secure Payment Form</title>
   <script src="https://www.google.com/recaptcha/api.js?render=6LeH6ncrAAAAACIV9SlbBBsWuXnMjgPs-qaApBLv"></script>
   <script>
-    function onSubmit(token) {
-      document.getElementById("payment-form").submit();
-    }
-
     grecaptcha.ready(function() {
       grecaptcha.execute('6LeH6ncrAAAAACIV9SlbBBsWuXnMjgPs-qaApBLv', {action: 'submit'}).then(function(token) {
-        document.getElementById('g-recaptcha-response').value = token;
+        document.getElementById('recaptcha-token').value = token;
       });
     });
   </script>
-  <script src="https://www.google.com/recaptcha/api.js?render=your_site_key_here"></script>
-<script>
-  grecaptcha.ready(function() {
-    grecaptcha.execute('6LeH6ncrAAAAACIV9SlbBBsWuXnMjgPs-qaApBLv', {action: 'submit'}).then(function(token) {
-       document.getElementById('recaptcha-token').value = token;
-    });
-  });
-</script>
+  <style>
+    body { font-family: Arial; margin: 40px; }
+    input { display: block; margin-bottom: 10px; padding: 10px; font-size: 16px; width: 300px; }
+    button { padding: 10px 20px; font-size: 16px; }
+  </style>
 </head>
 <body>
   <h2>Secure Payment Form</h2>
-  <form id="payment-form" method="POST" action="/submit">
-    <input name="name" placeholder="Name" required><br>
-    <input name="email" placeholder="Email" required><br>
-    <input type="hidden" id="g-recaptcha-response" name="g-recaptcha-response">
+  <form id="payment-form" method="POST">
+    <input name="name" placeholder="Name" required>
+    <input name="email" placeholder="Email" required>
+    <input type="hidden" id="recaptcha-token" name="recaptcha-token">
     <button type="submit">Pay</button>
   </form>
-  <input type="hidden" id="recaptcha-token" name="recaptcha-token">
 </body>
 </html>
