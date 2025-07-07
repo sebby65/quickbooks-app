@@ -5,3 +5,4 @@ python-dotenv
 prophet
 matplotlib
 gunicorn
+Flask-Mail==0.9.1
