@@ -1,18 +1,26 @@
-from flask import Flask, redirect, request
-import os
+from flask import Flask, render_template, request
+import requests
 
 app = Flask(__name__)
 
 @app.route("/")
 def index():
-    return "QuickBooks OAuth app is live"
+    return render_template("form.html")
 
-@app.route("/connect")
-def connect():
-    # Insert your existing OAuth logic here
-    return "Connect route placeholder"
+@app.route("/submit", methods=["POST"])
+def submit():
+    token = request.form.get('g-recaptcha-response')
+    secret_key = "6LeH6ncrAAAAGgRaZ8n3h-e9H8S2wk_5bGL53Jg"
 
-@app.route("/callback")
-def callback():
-    # Insert your callback logic here
-    return "Callback route placeholder"
+    verify_url = "https://www.google.com/recaptcha/api/siteverify"
+    response = requests.post(verify_url, data={
+        "secret": secret_key,
+        "response": token
+    })
+
+    result = response.json()
+    if not result.get("success"):
+        return "Failed reCAPTCHA. Try again."
+
+    return "Form successfully submitted!"
+
