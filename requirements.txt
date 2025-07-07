@@ -7,3 +7,4 @@ matplotlib
 gunicorn
 Flask-Mail==0.9.1
 intuit-oauth
+python-quickbooks
