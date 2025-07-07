@@ -24,5 +24,62 @@
     <input type="hidden" id="recaptcha-token" name="recaptcha-token">
     <button type="submit">Pay</button>
   </form>
+  <script src="https://appcenter.intuit.com/app/sdk/v1/quickbooks.js"></script>
+<script>
+  async function createTokenAndSubmit(e) {
+    e.preventDefault();
+
+    const cardData = {
+      number: document.getElementById("card-number").value,
+      expMonth: document.getElementById("exp-month").value,
+      expYear: document.getElementById("exp-year").value,
+      cvc: document.getElementById("card-cvc").value,
+    };
+
+    const response = await intuit.payments.createToken(cardData);
+    
+    if (response.token) {
+      const tokenInput = document.createElement("input");
+      tokenInput.type = "hidden";
+      tokenInput.name = "payment_token";
+      tokenInput.value = response.token;
+      document.getElementById("payment-form").appendChild(tokenInput);
+      document.getElementById("payment-form").submit();
+    } else {
+      alert("Payment failed. Try again.");
+    }
+  }
+
+  document.getElementById("payment-form").addEventListener("submit", createTokenAndSubmit);
+</script>
+
+  <script src="https://appcenter.intuit.com/app/sdk/v1/quickbooks.js"></script>
+<script>
+  async function createTokenAndSubmit(e) {
+    e.preventDefault();
+
+    const cardData = {
+      number: document.getElementById("card-number").value,
+      expMonth: document.getElementById("exp-month").value,
+      expYear: document.getElementById("exp-year").value,
+      cvc: document.getElementById("card-cvc").value,
+    };
+
+    const response = await intuit.payments.createToken(cardData);
+    
+    if (response.token) {
+      const tokenInput = document.createElement("input");
+      tokenInput.type = "hidden";
+      tokenInput.name = "payment_token";
+      tokenInput.value = response.token;
+      document.getElementById("payment-form").appendChild(tokenInput);
+      document.getElementById("payment-form").submit();
+    } else {
+      alert("Payment failed. Try again.");
+    }
+  }
+
+  document.getElementById("payment-form").addEventListener("submit", createTokenAndSubmit);
+</script>
 </body>
 </html>
