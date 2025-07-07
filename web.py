@@ -1,6 +1,20 @@
-from flask import Flask, render_template, request
+from flask import Flask, render_template, request, redirect
+from flask_mail import Mail, Message
+import os
 
 app = Flask(__name__)
+app.secret_key = os.getenv("FLASK_SECRET_KEY")
+
+# Flask-Mail config
+app.config.update(
+    MAIL_SERVER='smtp.gmail.com',
+    MAIL_PORT=587,
+    MAIL_USE_TLS=True,
+    MAIL_USERNAME=os.getenv("EMAIL_USER"),
+    MAIL_PASSWORD=os.getenv("EMAIL_PASS")
+)
+
+mail = Mail(app)
 
 @app.route("/")
 def home():
@@ -8,12 +22,18 @@ def home():
 
 @app.route("/submit", methods=["POST"])
 def submit():
-    token = request.form.get("payment_token")
-    if not token:
-        return "Token not received", 400
+    name = request.form.get("name")
+    email = request.form.get("email")
 
-    print("Received payment token:", token)
-    return "Payment token received. Processing will happen server-side."
+    msg = Message(
+        subject="New Payment Form Submission",
+        sender=os.getenv("EMAIL_USER"),
+        recipients=[os.getenv("EMAIL_RECEIVER")],
+        body=f"Name: {name}\nEmail: {email}"
+    )
+    mail.send(msg)
+
+    return redirect("/")  # Redirect to home or thank-you page
 
 if __name__ == "__main__":
     app.run(debug=True)
