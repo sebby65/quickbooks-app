@@ -14,6 +14,14 @@
       });
     });
   </script>
+  <script src="https://www.google.com/recaptcha/api.js?render=your_site_key_here"></script>
+<script>
+  grecaptcha.ready(function() {
+    grecaptcha.execute('your_site_key_here', {action: 'submit'}).then(function(token) {
+       document.getElementById('recaptcha-token').value = token;
+    });
+  });
+</script>
 </head>
 <body>
   <h2>Secure Payment Form</h2>
@@ -23,5 +31,6 @@
     <input type="hidden" id="g-recaptcha-response" name="g-recaptcha-response">
     <button type="submit">Pay</button>
   </form>
+  <input type="hidden" id="recaptcha-token" name="recaptcha-token">
 </body>
 </html>
