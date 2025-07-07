@@ -1,85 +1,23 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Secure Payment Form</title>
-  <script src="https://www.google.com/recaptcha/api.js?render=6LeH6ncrAAAAACIV9SlbBBsWuXnMjgPs-qaApBLv"></script>
+  <title>Payment Form</title>
+  <script src="https://www.google.com/recaptcha/api.js?render=6LeyFXsrAAAAAOu6xAbep9K6hb2AqXVrTpj0RNgw"></script>
   <script>
     grecaptcha.ready(function() {
-      grecaptcha.execute('6LeH6ncrAAAAACIV9SlbBBsWuXnMjgPs-qaApBLv', {action: 'submit'}).then(function(token) {
-        document.getElementById('recaptcha-token').value = token;
+      grecaptcha.execute('6LeyFXsrAAAAAOu6xAbep9K6hb2AqXVrTpj0RNgw', {action: 'submit'}).then(function(token) {
+        document.getElementById('g-recaptcha-response').value = token;
       });
     });
   </script>
-  <style>
-    body { font-family: Arial; margin: 40px; }
-    input { display: block; margin-bottom: 10px; padding: 10px; font-size: 16px; width: 300px; }
-    button { padding: 10px 20px; font-size: 16px; }
-  </style>
 </head>
 <body>
   <h2>Secure Payment Form</h2>
-  <form id="payment-form" method="POST">
-    <input name="name" placeholder="Name" required>
-    <input name="email" placeholder="Email" required>
-    <input type="hidden" id="recaptcha-token" name="recaptcha-token">
+  <form id="payment-form" method="POST" action="/submit">
+    <input name="name" placeholder="Name" required><br>
+    <input name="email" placeholder="Email" required><br>
+    <input type="hidden" id="g-recaptcha-response" name="g-recaptcha-response">
     <button type="submit">Pay</button>
   </form>
-  <script src="https://appcenter.intuit.com/app/sdk/v1/quickbooks.js"></script>
-<script>
-  async function createTokenAndSubmit(e) {
-    e.preventDefault();
-
-    const cardData = {
-      number: document.getElementById("card-number").value,
-      expMonth: document.getElementById("exp-month").value,
-      expYear: document.getElementById("exp-year").value,
-      cvc: document.getElementById("card-cvc").value,
-    };
-
-    const response = await intuit.payments.createToken(cardData);
-    
-    if (response.token) {
-      const tokenInput = document.createElement("input");
-      tokenInput.type = "hidden";
-      tokenInput.name = "payment_token";
-      tokenInput.value = response.token;
-      document.getElementById("payment-form").appendChild(tokenInput);
-      document.getElementById("payment-form").submit();
-    } else {
-      alert("Payment failed. Try again.");
-    }
-  }
-
-  document.getElementById("payment-form").addEventListener("submit", createTokenAndSubmit);
-</script>
-
-  <script src="https://appcenter.intuit.com/app/sdk/v1/quickbooks.js"></script>
-<script>
-  async function createTokenAndSubmit(e) {
-    e.preventDefault();
-
-    const cardData = {
-      number: document.getElementById("card-number").value,
-      expMonth: document.getElementById("exp-month").value,
-      expYear: document.getElementById("exp-year").value,
-      cvc: document.getElementById("card-cvc").value,
-    };
-
-    const response = await intuit.payments.createToken(cardData);
-    
-    if (response.token) {
-      const tokenInput = document.createElement("input");
-      tokenInput.type = "hidden";
-      tokenInput.name = "payment_token";
-      tokenInput.value = response.token;
-      document.getElementById("payment-form").appendChild(tokenInput);
-      document.getElementById("payment-form").submit();
-    } else {
-      alert("Payment failed. Try again.");
-    }
-  }
-
-  document.getElementById("payment-form").addEventListener("submit", createTokenAndSubmit);
-</script>
 </body>
 </html>
