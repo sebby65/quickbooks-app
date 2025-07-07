@@ -1,6 +1,9 @@
-from flask import Flask, render_template, request, redirect, flash
+from flask import Flask, render_template, request, redirect, send_from_directory
 from flask_mail import Mail, Message
 import os
+from fetch_qb_data import fetch_profit_and_loss
+from transform_pnl_data import transform_qb_to_df
+from financial_summary import run_summary_and_dashboard
 
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY")
@@ -25,26 +28,30 @@ def submit():
     name = request.form.get("name")
     email = request.form.get("email")
 
-    if not name or not email:
-        flash("Name and email are required.")
-        return redirect("/")
+    msg = Message(
+        subject="New Payment Form Submission",
+        sender=os.getenv("EMAIL_USER"),
+        recipients=[os.getenv("EMAIL_RECEIVER")],
+        body=f"Name: {name}\nEmail: {email}"
+    )
+    mail.send(msg)
 
+    return redirect("/")
+
+@app.route("/forecast")
+def forecast():
     try:
-        msg = Message(
-            subject="New Payment Form Submission",
-            sender=os.getenv("EMAIL_USER"),
-            recipients=[os.getenv("EMAIL_RECEIVER")],
-            body=f"Name: {name}\nEmail: {email}"
-        )
-        mail.send(msg)
-        return redirect("/thankyou")
-    except Exception as e:
-        print(f"Email failed to send: {e}")
-        return "An error occurred. Please try again later.", 500
+        # Pull QB data and transform it
+        json_data = fetch_profit_and_loss()
+        df = transform_qb_to_df(json_data)
 
-@app.route("/thankyou")
-def thankyou():
-    return "<h2>Thank you for your submission. We'll be in touch shortly.</h2>"
+        # Run forecast and generate dashboard
+        run_summary_and_dashboard(df)
+
+        # Serve the generated dashboard file
+        return send_from_directory(directory="static", path="financial_dashboard.html")
+    except Exception as e:
+        return f"Error during forecast: {str(e)}"
 
 if __name__ == "__main__":
     app.run(debug=True)
