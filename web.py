@@ -1,14 +1,13 @@
-from flask import Flask, render_template, request, redirect, send_from_directory
+from flask import Flask, render_template, request, redirect, jsonify
 from flask_mail import Mail, Message
+from transform_pnl_data import transform_qb_to_df, generate_forecast
 import os
-from fetch_qb_data import fetch_profit_and_loss
-from transform_pnl_data import transform_qb_to_df
-from financial_summary import run_summary_and_dashboard
+import json
 
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY")
 
-# Flask-Mail config
+# Flask-Mail configuration
 app.config.update(
     MAIL_SERVER='smtp.gmail.com',
     MAIL_PORT=587,
@@ -38,20 +37,12 @@ def submit():
 
     return redirect("/")
 
-@app.route("/forecast")
+@app.route("/forecast", methods=["POST"])
 def forecast():
-    try:
-        # Pull QB data and transform it
-        json_data = fetch_profit_and_loss()
-        df = transform_qb_to_df(json_data)
-
-        # Run forecast and generate dashboard
-        run_summary_and_dashboard(df)
-
-        # Serve the generated dashboard file
-        return send_from_directory(directory="static", path="financial_dashboard.html")
-    except Exception as e:
-        return f"Error during forecast: {str(e)}"
+    qb_data = request.get_json()
+    df = transform_qb_to_df(qb_data)
+    forecast = generate_forecast(df)
+    return jsonify(forecast.to_dict(orient='records'))
 
 if __name__ == "__main__":
     app.run(debug=True)
