@@ -12,6 +12,17 @@ RECAPTCHA_SECRET_KEY = os.getenv("RECAPTCHA_SECRET_KEY")
 @app.route("/", methods=["GET", "POST"])
 def home():
     if request.method == "POST":
+@app.route("/submit", methods=["POST"])
+def submit():
+    token = request.form.get("payment_token")
+    if not token:
+        return "Token not received", 400
+
+    # Log or forward the token to your payment processor
+    print("Received payment token:", token)
+
+    return "Payment token received. Processing will happen server-side."
+
         # Get form inputs
         name = request.form.get("name")
         email = request.form.get("email")
