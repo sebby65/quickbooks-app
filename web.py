@@ -1,37 +1,41 @@
-from flask import Flask, render_template, request, jsonify
-import requests
+from flask import Flask, render_template, request
 import os
+import requests
+from dotenv import load_dotenv
+
+load_dotenv()
 
 app = Flask(__name__)
 
-RECAPTCHA_SECRET_KEY = os.environ.get("RECAPTCHA_SECRET_KEY")  # set this in your environment
+RECAPTCHA_SECRET_KEY = os.getenv("RECAPTCHA_SECRET_KEY")
 
-@app.route("/")
+@app.route("/", methods=["GET", "POST"])
 def home():
+    if request.method == "POST":
+        # Get form inputs
+        name = request.form.get("name")
+        email = request.form.get("email")
+        token = request.form.get("recaptcha-token")
+
+        # Verify reCAPTCHA
+        verify_url = "https://www.google.com/recaptcha/api/siteverify"
+        payload = {
+            "secret": RECAPTCHA_SECRET_KEY,
+            "response": token
+        }
+
+        response = requests.post(verify_url, data=payload)
+        result = response.json()
+
+        if not result.get("success") or result.get("score", 0) < 0.5:
+            return "reCAPTCHA failed. Please try again.", 400
+
+        # 🚧 Payment token logic will go here
+        print(f"Received from {name} ({email})")
+
+        return "Payment form submitted successfully!"
+
     return render_template("form.html")
-
-@app.route("/submit", methods=["POST"])
-def submit():
-    token = request.form.get("g-recaptcha-response")
-
-    if not token:
-        return "reCAPTCHA token missing", 400
-
-    # Verify with Google
-    verify_url = "https://www.google.com/recaptcha/api/siteverify"
-    payload = {
-        "secret": RECAPTCHA_SECRET_KEY,
-        "response": token
-    }
-    resp = requests.post(verify_url, data=payload)
-    result = resp.json()
-
-    if result.get("success") and result.get("score", 0) > 0.5:
-        return "Form submission successful!"
-    else:
-        return "reCAPTCHA failed. Try again.", 400
 
 if __name__ == "__main__":
     app.run(debug=True)
-
-
