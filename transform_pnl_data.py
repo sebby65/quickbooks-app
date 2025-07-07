@@ -5,7 +5,6 @@ import openai
 from datetime import datetime
 import os
 from dotenv import load_dotenv
-from transform_pnl_data import transform_qb_to_df
 
 # Load environment variables
 load_dotenv()
