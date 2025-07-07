@@ -2,7 +2,7 @@ from flask import Flask, render_template, request, redirect, send_from_directory
 from flask_mail import Mail, Message
 import os
 from fetch_qb_data import fetch_profit_and_loss
-from transform_pnl_data import transform_qb_to_df
+from transform_pnl_data.py import transform_qb_to_df
 from financial_summary import run_summary_and_dashboard
 
 app = Flask(__name__)
