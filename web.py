@@ -1,34 +1,33 @@
-from flask import Flask, render_template, jsonify, request
-import json
+from flask import Flask, render_template
 from transform_pnl_data import transform_qb_to_df, generate_forecast
 
 app = Flask(__name__)
 
+# Home page
 @app.route('/')
 def home():
-    return 'Clariqor Financial Forecasting App'
+    return render_template('financial_dashboard.html', forecast=[])
 
-@app.route("/dashboard")
-def dashboard():
-    try:
-        forecast_df = pd.read_csv('forecast_output.csv')
-        forecast_json = forecast_df.to_dict(orient='records')
-    except Exception:
-        forecast_json = []
-
-    return render_template("financial_dashboard.html", forecast=forecast_json)
-
-
-@app.route('/api/forecast', methods=['POST'])
+# Forecast generation route
+@app.route('/forecast')
 def forecast():
-    try:
-        qb_data = request.get_json()
-        df = transform_qb_to_df(qb_data)
-        forecast_df = generate_forecast(df)
-        result = forecast_df.to_dict(orient='records')
-        return jsonify(result)
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+    # Example QuickBooks-style data for testing
+    qb_data = {
+        "Rows": {
+            "Row": [
+                {"ColData": [{"value": "2024-01-01"}, {"value": "1000"}]},
+                {"ColData": [{"value": "2024-02-01"}, {"value": "1100"}]},
+                {"ColData": [{"value": "2024-03-01"}, {"value": "1200"}]},
+            ]
+        }
+    }
+
+    # Transform and forecast
+    df = transform_qb_to_df(qb_data)
+    forecast_df = generate_forecast(df)
+    forecast_json = forecast_df.to_dict(orient='records')
+
+    return render_template('financial_dashboard.html', forecast=forecast_json)
 
 if __name__ == '__main__':
     app.run(debug=True)
