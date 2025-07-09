@@ -1,1 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Financial Dashboard</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 40px;
+            background-color: #f4f6f8;
+            color: #333;
+        }
+        h1 {
+            text-align: center;
+        }
+        .chart-container {
+            width: 80%;
+            margin: 0 auto;
+        }
+    </style>
+</head>
+<body>
+    <h1>Financial Forecast Dashboard</h1>
+    <div class="chart-container">
+        <canvas id="forecastChart" width="600" height="400"></canvas>
+    </div>
+
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <!-- Forecast Chart Script -->
+    <script>
+        fetch('/forecast')
+            .then(response => response.json())
+            .then(data => {
+                const labels = data.map(d => d.date);
+                const values = data.map(d => d.forecast);
+
+                const ctx = document.getElementById('forecastChart').getContext('2d');
+                new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: labels,
+                        datasets: [{
+                            label: 'Forecasted Revenue',
+                            data: values,
+                            borderColor: 'rgba(75, 192, 192, 1)',
+                            backgroundColor: 'rgba(75, 192, 192, 0.2)',
+                            borderWidth: 2,
+                            fill: true,
+                            tension: 0.3,
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        plugins: {
+                            legend: { display: true },
+                            title: {
+                                display: true,
+                                text: '12-Month Revenue Forecast'
+                            }
+                        }
+                    }
+                });
+            })
+            .catch(err => console.error("Error loading forecast:", err));
+    </script>
+</body>
+</html>
 
