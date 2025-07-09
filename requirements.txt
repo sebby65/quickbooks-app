@@ -9,3 +9,4 @@ Flask-Mail==0.9.1
 intuit-oauth
 python-quickbooks
 openai
+plotly>=5.20.0
