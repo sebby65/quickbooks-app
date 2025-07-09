@@ -8,9 +8,16 @@ app = Flask(__name__)
 def home():
     return 'Clariqor Financial Forecasting App'
 
-@app.route('/dashboard')
+@app.route("/dashboard")
 def dashboard():
-    return render_template('financial_dashboard.html')
+    try:
+        forecast_df = pd.read_csv('forecast_output.csv')
+        forecast_json = forecast_df.to_dict(orient='records')
+    except Exception:
+        forecast_json = []
+
+    return render_template("financial_dashboard.html", forecast=forecast_json)
+
 
 @app.route('/api/forecast', methods=['POST'])
 def forecast():
