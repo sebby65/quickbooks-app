@@ -1,27 +1,27 @@
-from flask import Flask, render_template
-from transform_pnl_data import transform_qb_to_df, generate_forecast
+from flask import Flask, render_template, jsonify, request
 import json
+from transform_pnl_data import transform_qb_to_df, generate_forecast
 
 app = Flask(__name__)
 
-# Sample hardcoded QuickBooks JSON structure — replace this with real fetch logic later
-qb_sample_data = {
-    "Rows": {
-        "Row": [
-            {"ColData": [{"value": "2024-01-01"}, {"value": "1000"}]},
-            {"ColData": [{"value": "2024-02-01"}, {"value": "1100"}]},
-            {"ColData": [{"value": "2024-03-01"}, {"value": "1200"}]},
-            {"ColData": [{"value": "2024-04-01"}, {"value": "1250"}]},
-        ]
-    }
-}
+@app.route('/')
+def home():
+    return 'Clariqor Financial Forecasting App'
 
 @app.route('/dashboard')
 def dashboard():
-    df = transform_qb_to_df(qb_sample_data)
-    forecast_df = generate_forecast(df)
-    forecast_data = forecast_df.to_dict(orient='records')
-    return render_template('financial_dashboard.html', forecast_data=json.dumps(forecast_data))
+    return render_template('financial_dashboard.html')
+
+@app.route('/api/forecast', methods=['POST'])
+def forecast():
+    try:
+        qb_data = request.get_json()
+        df = transform_qb_to_df(qb_data)
+        forecast_df = generate_forecast(df)
+        result = forecast_df.to_dict(orient='records')
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
     app.run(debug=True)
