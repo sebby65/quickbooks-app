@@ -1,75 +1,96 @@
-# web.py
-from flask import Flask, render_template, jsonify, redirect, request, session
-from fetch_qb_data import fetch_profit_and_loss
-from transform_pnl_data import transform_qb_to_df, generate_forecast
-from intuitlib.client import AuthClient
-from intuitlib.enums import Scopes
 import os
+import json
+import pandas as pd
+from flask import Flask, render_template_string, redirect, request, session
+from prophet import Prophet
+from intuitlib.client import AuthClient
+from quickbooks import QuickBooks
+from quickbooks.objects.invoice import Invoice
+from dotenv import load_dotenv
+
+load_dotenv()
 
 app = Flask(__name__)
-app.secret_key = os.environ.get("FLASK_SECRET_KEY", "devsecret")
+app.secret_key = os.getenv("FLASK_SECRET_KEY", "dev")
 
-# Hardcoded redirect URI to prevent mismatch
+# OAuth2 Config
 auth_client = AuthClient(
-    client_id=os.environ.get("QB_CLIENT_ID"),
-    client_secret=os.environ.get("QB_CLIENT_SECRET"),
-    redirect_uri="https://quickbooks-app-3.onrender.com/callback",
-    environment="sandbox"
+    client_id=os.getenv("CLIENT_ID"),
+    client_secret=os.getenv("CLIENT_SECRET"),
+    environment="production",
+    redirect_uri=os.getenv("REDIRECT_URI")
 )
 
-@app.route('/')
-def dashboard():
-    return render_template('financial_dashboard.html')
+qbo_client = None
 
-@app.route('/connect')
+@app.route("/")
+def index():
+    return render_template_string('''
+        <h1><b>Financial Forecast Dashboard</b></h1>
+        <form action="/forecast" method="post">
+            <button type="submit">Generate Forecast</button>
+        </form>
+        {% if error %}<p><b>Forecasting failed:</b> {{ error }}</p>{% endif %}
+        {% if forecast_url %}<iframe src="{{ forecast_url }}" width="100%" height="600"></iframe>{% endif %}
+        <p>{{ status }}</p>
+    ''',
+    status="Connected to QuickBooks" if qbo_client else "Not connected to QuickBooks",
+    error=request.args.get("error"),
+    forecast_url=request.args.get("forecast"))
+
+@app.route("/connect")
 def connect():
-    auth_url = auth_client.get_authorization_url([Scopes.ACCOUNTING])
-    print("Generated AUTH URL:", auth_url)
-    return redirect(auth_url)
+    url = auth_client.get_authorization_url(["com.intuit.quickbooks.accounting"])
+    return redirect(url)
 
-@app.route('/callback')
+@app.route("/callback")
 def callback():
-    auth_code = request.args.get('code')
-    realm_id = request.args.get('realmId')
+    auth_code = request.args.get("code")
+    realm_id = request.args.get("realmId")
+    session["realm_id"] = realm_id
 
-    if not auth_code or not realm_id:
-        print("Missing code or realm ID.")
-        return "Missing authorization code or realm ID", 400
+    auth_client.get_bearer_token(auth_code)
+    global qbo_client
+    qbo_client = QuickBooks(
+        auth_client=auth_client,
+        refresh_token=auth_client.refresh_token,
+        company_id=realm_id
+    )
+    return redirect("/")
 
-    try:
-        print(f"Received code: {auth_code}, realm_id: {realm_id}")
-        auth_client.get_bearer_token(auth_code)
-        session['access_token'] = auth_client.access_token
-        session['realm_id'] = realm_id
-        print(f"Access token: {auth_client.access_token}")
-        print(f"Session set: {dict(session)}")
-    except Exception as e:
-        print(f"Token exchange failed: {e}")
-        return f"OAuth token error: {e}", 500
-
-    return redirect('/')
-
-@app.route('/forecast', methods=['POST'])
+@app.route("/forecast", methods=["POST"])
 def forecast():
     try:
-        access_token = session.get('access_token')
-        realm_id = session.get('realm_id')
+        if not qbo_client:
+            return redirect("/connect")
 
-        if not access_token or not realm_id:
-            return jsonify({'error': 'Not connected to QuickBooks'}), 401
+        # Get Invoices (this could be updated for other transaction types)
+        invoices = Invoice.all(qbo=qbo_client)
+        data = []
+        for invoice in invoices:
+            if hasattr(invoice, 'TxnDate') and hasattr(invoice, 'TotalAmt'):
+                data.append({"date": invoice.TxnDate, "amount": invoice.TotalAmt})
 
-        qb_data = fetch_profit_and_loss(access_token, realm_id)
-        df = transform_qb_to_df(qb_data)
-        forecast_df = generate_forecast(df)
-        forecast_data = forecast_df.to_dict(orient='records')
-        return jsonify(forecast_data)
+        if not data:
+            raise ValueError("No invoice data returned from QuickBooks.")
+
+        df = pd.DataFrame(data)
+        df['date'] = pd.to_datetime(df['date'])
+        df = df.groupby('date').sum().reset_index()
+        df = df.rename(columns={"date": "ds", "amount": "y"})
+
+        model = Prophet()
+        model.fit(df)
+        future = model.make_future_dataframe(periods=30)
+        forecast = model.predict(future)
+
+        fig = model.plot(forecast)
+        fig.savefig("static/forecast.png")
+
+        return redirect("/?forecast=/static/forecast.png")
+
     except Exception as e:
-        print(f"Forecasting error: {e}")
-        return jsonify({'error': f'Forecasting failed: {str(e)}'}), 500
+        return redirect(f"/?error={str(e)}")
 
-@app.route('/health')
-def health():
-    return "OK", 200
-
-if __name__ == '__main__':
+if __name__ == "__main__":
     app.run(debug=True)
