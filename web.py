@@ -26,7 +26,7 @@ def forecast():
 @app.route('/get_qb_data', methods=['GET'])
 def get_qb_data():
     try:
-        qb_data = get_profit_and_loss()
+        qb_data = fetch_profit_and_loss()
         return jsonify(qb_data)
     except Exception as e:
         return jsonify({'error': f'QuickBooks fetch failed: {str(e)}'}), 500
@@ -35,7 +35,7 @@ def get_qb_data():
 @app.route('/plot')
 def plot():
     try:
-        qb_data = get_profit_and_loss()
+        qb_data = fetch_profit_and_loss()
         df = transform_qb_to_df(qb_data)
         forecast_df = generate_forecast(df)
 
