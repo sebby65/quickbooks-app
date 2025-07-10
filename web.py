@@ -1,5 +1,3 @@
-# web.py
-
 from flask import Flask, render_template, jsonify
 from fetch_qb_data import fetch_profit_and_loss
 from transform_pnl_data import transform_qb_to_df, generate_forecast
