@@ -1,6 +1,6 @@
 from flask import Flask, render_template, request, jsonify
 from transform_pnl_data import transform_qb_to_df, generate_forecast
-from fetch_qb_data import get_profit_and_loss
+from fetch_qb_data import fetch_profit_and_loss
 import plotly.graph_objs as go
 import plotly.io as pio
 
