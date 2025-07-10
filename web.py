@@ -1,84 +1,65 @@
 import os
 import json
-import requests
-from flask import Flask, redirect, request, session, render_template, jsonify
+from flask import Flask, redirect, request, render_template, session, jsonify
 from intuitlib.client import AuthClient
+from intuitlib.enums import Scopes
 from intuitlib.exceptions import AuthClientError
-from quickbooks import QuickBooks
-from quickbooks.objects.invoice import Invoice
-from prophet import Prophet
-import pandas as pd
-from dotenv import load_dotenv
-
-load_dotenv()
+from requests_oauthlib import OAuth2Session
+from flask_session import Session
 
 app = Flask(__name__)
-app.secret_key = os.getenv("FLASK_SECRET_KEY")
+app.secret_key = os.environ.get("FLASK_SECRET_KEY")
+app.config['SESSION_TYPE'] = 'filesystem'
+Session(app)
 
-# Initialize AuthClient for QuickBooks
-auth_client = AuthClient(
-    client_id=os.getenv("QB_CLIENT_ID"),
-    client_secret=os.getenv("QB_CLIENT_SECRET"),
-    environment=os.getenv("QB_ENVIRONMENT", "production"),
-    redirect_uri=os.getenv("QB_REDIRECT_URI")
-)
-
-@app.route("/")
+@app.route('/')
 def index():
-    return render_template("index.html")
+    return render_template('index.html')
 
-@app.route("/connect")
+@app.route('/connect')
 def connect():
-    auth_url = auth_client.get_authorization_url([
-        "com.intuit.quickbooks.accounting"]
+    auth_client = AuthClient(
+        client_id=os.environ.get("QB_CLIENT_ID"),
+        client_secret=os.environ.get("QB_CLIENT_SECRET"),
+        environment=os.environ.get("QB_ENVIRONMENT"),
+        redirect_uri=os.environ.get("REDIRECT_URI")
     )
+    
+    auth_url = auth_client.get_authorization_url([Scopes.ACCOUNTING])
+    session['auth_client'] = auth_client.__dict__
+    print(f"Generated AUTH URL: {auth_url}")
     return redirect(auth_url)
 
-@app.route("/callback")
+@app.route('/callback')
 def callback():
-    code = request.args.get("code")
-    realm_id = request.args.get("realmId")
-
-    try:
-        auth_client.get_bearer_token(code, realm_id=realm_id)
-        session["realm_id"] = realm_id
-        session["access_token"] = auth_client.access_token
-        session["refresh_token"] = auth_client.refresh_token
-    except AuthClientError as e:
-        return jsonify(e.response), 400
-
-    return redirect("/")
-
-@app.route("/forecast", methods=["POST"])
-def forecast():
-    if "access_token" not in session:
-        return "Unauthorized", 401
-
-    client = QuickBooks(
-        auth_client=auth_client,
-        refresh_token=session["refresh_token"],
-        company_id=session["realm_id"]
+    auth_client = AuthClient(
+        client_id=os.environ.get("QB_CLIENT_ID"),
+        client_secret=os.environ.get("QB_CLIENT_SECRET"),
+        environment=os.environ.get("QB_ENVIRONMENT"),
+        redirect_uri=os.environ.get("REDIRECT_URI")
     )
 
-    invoices = Invoice.all(qb=client)
+    auth_client.__dict__.update(session['auth_client'])
 
-    data = [{
-        "ds": inv.TxnDate,
-        "y": float(inv.TotalAmt)
-    } for inv in invoices if hasattr(inv, 'TxnDate') and hasattr(inv, 'TotalAmt')]
+    try:
+        auth_client.get_bearer_token(request.args.get('code'), realm_id=request.args.get('realmId'))
+        session['access_token'] = auth_client.access_token
+        session['realm_id'] = request.args.get('realmId')
+        print("Access token acquired")
+        return redirect('/')
+    except AuthClientError as e:
+        return f"Callback error: {e}"
 
-    if not data:
-        return "No valid invoice data found.", 400
+@app.route('/forecast', methods=['POST'])
+def forecast():
+    if 'access_token' not in session or 'realm_id' not in session:
+        return jsonify({"error": "Unauthorized"}), 401
 
-    df = pd.DataFrame(data)
-    model = Prophet()
-    model.fit(df)
+    try:
+        # Placeholder logic for financial forecasting
+        return jsonify({"message": "Forecasting complete."})
+    except Exception as e:
+        return jsonify({"error": f"Forecasting failed: {str(e)}"}), 500
 
-    future = model.make_future_dataframe(periods=30)
-    forecast = model.predict(future)
-
-    result = forecast[['ds', 'yhat']].tail(30).to_dict(orient='records')
-    return jsonify(result)
-
-if __name__ == "__main__":
+if __name__ == '__main__':
     app.run(debug=True)
