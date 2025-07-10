@@ -1,0 +1,19 @@
+<!-- templates/index.html -->
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Financial Forecast Dashboard</title>
+</head>
+<body>
+    <h1>Financial Forecast Dashboard</h1>
+    <form action="/forecast" method="post">
+        <button type="submit">Generate Forecast</button>
+    </form>
+    {% if error %}
+        <p style="color: red;">Forecasting failed: {{ error }}</p>
+    {% endif %}
+    {% if plot_url %}
+        <img src="data:image/png;base64,{{ plot_url }}">
+    {% endif %}
+</body>
+</html>
