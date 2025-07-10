@@ -1,7 +1,6 @@
 import pandas as pd
 from prophet import Prophet
 
-# CLEAN QB DATA & TRANSFORM TO PREDICTABLE FORMAT
 def transform_qb_to_df(qb_data):
     rows = qb_data.get('Rows', {}).get('Row', [])
     data = []
@@ -22,21 +21,13 @@ def transform_qb_to_df(qb_data):
     df = df.groupby('date').sum().reset_index()
     return df
 
-# GENERATE FORECAST
 def generate_forecast(df):
     prophet_df = df.rename(columns={'date': 'ds', 'amount': 'y'})
     model = Prophet()
     model.fit(prophet_df)
-
     future = model.make_future_dataframe(periods=12, freq='M')
     forecast = model.predict(future)
-
     forecast = forecast[['ds', 'yhat']].rename(columns={'ds': 'date', 'yhat': 'forecast'})
     forecast['date'] = forecast['date'].dt.strftime('%Y-%m')
     forecast['forecast'] = forecast['forecast'].round(2)
-
-    # Drop duplicates by date, keeping the latest forecast
-    forecast = forecast.drop_duplicates(subset='date', keep='last')
-
     return forecast
-
