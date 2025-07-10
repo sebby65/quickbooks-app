@@ -6,89 +6,130 @@
     <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
     <style>
         body {
-            font-family: 'Segoe UI', sans-serif;
-            margin: 2em;
-            background-color: #f8f9fa;
+            font-family: Arial, sans-serif;
+            margin: 30px;
+            background-color: #f7f8fa;
         }
-        h2 {
-            color: #212529;
-        }
-        button {
-            padding: 8px 16px;
+
+        h1 {
+            font-size: 24px;
             margin-bottom: 20px;
-            background-color: #0d6efd;
+        }
+
+        button {
+            background-color: #007bff;
             color: white;
+            padding: 10px 16px;
             border: none;
             border-radius: 4px;
             cursor: pointer;
         }
-        button:hover {
-            background-color: #0b5ed7;
-        }
-        #chart {
-            width: 100%;
-            max-width: 1000px;
-            margin-bottom: 40px;
-        }
-        table {
+
+        #forecast-table {
+            margin-top: 30px;
             border-collapse: collapse;
             width: 100%;
-            max-width: 600px;
-            background-color: white;
         }
-        th, td {
-            text-align: center;
+
+        #forecast-table th,
+        #forecast-table td {
+            border: 1px solid #ddd;
             padding: 10px;
-            border: 1px solid #dee2e6;
         }
-        th {
-            background-color: #343a40;
+
+        #forecast-table th {
+            background-color: #2e2e2e;
             color: white;
         }
-        tr:nth-child(even) {
-            background-color: #f1f1f1;
+
+        #forecast-table tr:nth-child(even) {
+            background-color: #f2f2f2;
+        }
+
+        #plot {
+            margin-top: 40px;
         }
     </style>
 </head>
 <body>
-    <h2>Clariqor Forecast Dashboard</h2>
-    <button onclick="location.href='/forecast'">Generate Forecast</button>
 
-    <div id="chart"></div>
+    <h1>Clariqor Forecast Dashboard</h1>
 
-    <table>
+    <button id="generate-btn">Generate Forecast</button>
+
+    <div id="plot"></div>
+
+    <table id="forecast-table">
         <thead>
             <tr>
                 <th>Date</th>
                 <th>Forecast</th>
             </tr>
         </thead>
-        <tbody>
-            {% for row in forecast %}
-                <tr>
-                    <td>{{ row.date }}</td>
-                    <td>{{ row.forecast }}</td>
-                </tr>
-            {% endfor %}
-        </tbody>
+        <tbody></tbody>
     </table>
 
     <script>
-        const forecastData = {{ forecast | tojson }};
-        const dates = forecastData.map(item => item.date);
-        const values = forecastData.map(item => item.forecast);
-
-        Plotly.newPlot('chart', [{
-            x: dates,
-            y: values,
-            mode: 'lines+markers',
-            line: { shape: 'spline', color: '#0d6efd' },
-            marker: { size: 6 }
-        }], {
-            margin: { t: 20 },
-            xaxis: { title: 'Date' },
-            yaxis: { title: 'Forecast Amount ($)' }
+        document.getElementById("generate-btn").addEventListener("click", function () {
+            fetch('/forecast', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    "Rows": {
+                        "Row": [
+                            { "ColData": [{ "value": "2024-01-01" }, { "value": "1000" }] },
+                            { "ColData": [{ "value": "2024-02-01" }, { "value": "1100" }] },
+                            { "ColData": [{ "value": "2024-03-01" }, { "value": "1200" }] }
+                        ]
+                    }
+                })
+            })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error('Network response was not ok');
+                }
+                return response.json();
+            })
+            .then(data => {
+                updateTable(data);
+                plotForecast(data);
+            })
+            .catch(error => console.error('Error:', error));
         });
+
+        function updateTable(data) {
+            const tbody = document.querySelector('#forecast-table tbody');
+            tbody.innerHTML = '';
+            data.forEach(entry => {
+                const row = document.createElement('tr');
+                row.innerHTML = `<td>${entry.date}</td><td>${entry.forecast}</td>`;
+                tbody.appendChild(row);
+            });
+        }
+
+        function plotForecast(data) {
+            const dates = data.map(entry => entry.date);
+            const values = data.map(entry => entry.forecast);
+
+            const trace = {
+                x: dates,
+                y: values,
+                type: 'scatter',
+                mode: 'lines+markers',
+                line: { color: '#007bff' }
+            };
+
+            const layout = {
+                title: 'Financial Forecast',
+                xaxis: { title: 'Date' },
+                yaxis: { title: 'Forecast Amount ($)' }
+            };
+
+            Plotly.newPlot('plot', [trace], layout);
+        }
     </script>
+
 </body>
 </html>
