@@ -1,65 +1,96 @@
 import os
-import json
-from flask import Flask, redirect, request, render_template, session, jsonify
+from flask import Flask, request, redirect, session, render_template
 from intuitlib.client import AuthClient
 from intuitlib.enums import Scopes
-from intuitlib.exceptions import AuthClientError
-from requests_oauthlib import OAuth2Session
-from flask_session import Session
+import requests
+import matplotlib.pyplot as plt
+import io
+import base64
+import pandas as pd
 
 app = Flask(__name__)
-app.secret_key = os.environ.get("FLASK_SECRET_KEY")
-app.config['SESSION_TYPE'] = 'filesystem'
-Session(app)
+app.secret_key = os.getenv("FLASK_SECRET_KEY")
 
-@app.route('/')
+# OAuth credentials
+client_id = os.getenv("QB_CLIENT_ID")
+client_secret = os.getenv("QB_CLIENT_SECRET")
+redirect_uri = os.getenv("REDIRECT_URI")
+environment = os.getenv("QB_ENVIRONMENT", "sandbox")
+
+# Setup Intuit auth client
+auth_client = AuthClient(
+    client_id=client_id,
+    client_secret=client_secret,
+    environment=environment,
+    redirect_uri=redirect_uri
+)
+
+@app.route("/")
 def index():
-    return render_template('index.html')
+    error = session.pop("forecast_error", None)
+    plot_url = session.pop("plot_url", None)
+    return render_template("index.html", error=error, plot_url=plot_url)
 
-@app.route('/connect')
+@app.route("/connect")
 def connect():
-    auth_client = AuthClient(
-        client_id=os.environ.get("QB_CLIENT_ID"),
-        client_secret=os.environ.get("QB_CLIENT_SECRET"),
-        environment=os.environ.get("QB_ENVIRONMENT"),
-        redirect_uri=os.environ.get("REDIRECT_URI")
-    )
-    
     auth_url = auth_client.get_authorization_url([Scopes.ACCOUNTING])
-    session['auth_client'] = auth_client.__dict__
-    print(f"Generated AUTH URL: {auth_url}")
     return redirect(auth_url)
 
-@app.route('/callback')
+@app.route("/callback")
 def callback():
-    auth_client = AuthClient(
-        client_id=os.environ.get("QB_CLIENT_ID"),
-        client_secret=os.environ.get("QB_CLIENT_SECRET"),
-        environment=os.environ.get("QB_ENVIRONMENT"),
-        redirect_uri=os.environ.get("REDIRECT_URI")
-    )
-
-    auth_client.__dict__.update(session['auth_client'])
+    code = request.args.get("code")
+    realm_id = request.args.get("realmId")
+    if not code or not realm_id:
+        return "Missing code or realmId", 400
 
     try:
-        auth_client.get_bearer_token(request.args.get('code'), realm_id=request.args.get('realmId'))
-        session['access_token'] = auth_client.access_token
-        session['realm_id'] = request.args.get('realmId')
-        print("Access token acquired")
-        return redirect('/')
-    except AuthClientError as e:
-        return f"Callback error: {e}"
-
-@app.route('/forecast', methods=['POST'])
-def forecast():
-    if 'access_token' not in session or 'realm_id' not in session:
-        return jsonify({"error": "Unauthorized"}), 401
-
-    try:
-        # Placeholder logic for financial forecasting
-        return jsonify({"message": "Forecasting complete."})
+        auth_client.get_bearer_token(code)
+        session["access_token"] = auth_client.access_token
+        session["realm_id"] = realm_id
+        return redirect("/")
     except Exception as e:
-        return jsonify({"error": f"Forecasting failed: {str(e)}"}), 500
+        return f"Auth failed: {str(e)}", 500
 
-if __name__ == '__main__':
-    app.run(debug=True)
+@app.route("/forecast", methods=["POST"])
+def forecast():
+    access_token = session.get("access_token")
+    realm_id = session.get("realm_id")
+    if not access_token or not realm_id:
+        session["forecast_error"] = "Missing access token or realm ID."
+        return redirect("/")
+
+    url = f"https://sandbox-quickbooks.api.intuit.com/v3/company/{realm_id}/query"
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Accept": "application/json",
+        "Content-Type": "application/text"
+    }
+    query = "SELECT TxnDate, TotalAmt FROM Invoice"
+
+    try:
+        response = requests.post(url, headers=headers, data=query)
+        response.raise_for_status()
+        invoices = response.json()["QueryResponse"]["Invoice"]
+        df = pd.DataFrame(invoices)
+        df["TxnDate"] = pd.to_datetime(df["TxnDate"])
+        df = df.sort_values("TxnDate")
+        df = df.groupby("TxnDate").sum().reset_index()
+
+        # Plotting
+        plt.figure(figsize=(10, 5))
+        plt.plot(df["TxnDate"], df["TotalAmt"], marker="o")
+        plt.title("Financial Forecast")
+        plt.xlabel("Date")
+        plt.ylabel("Total Amount")
+        plt.grid(True)
+        plt.tight_layout()
+
+        img = io.BytesIO()
+        plt.savefig(img, format="png")
+        img.seek(0)
+        plot_url = base64.b64encode(img.read()).decode("utf-8")
+        session["plot_url"] = plot_url
+    except Exception as e:
+        session["forecast_error"] = str(e)
+
+    return redirect("/")
