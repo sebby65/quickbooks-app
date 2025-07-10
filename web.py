@@ -7,13 +7,13 @@ from intuitlib.enums import Scopes
 import os
 
 app = Flask(__name__)
-app.secret_key = os.environ.get("FLASK_SECRET_KEY", "supersecret")  # Replace in production
+app.secret_key = os.environ.get("FLASK_SECRET_KEY", "devsecret")
 
-# QuickBooks OAuth2 config
+# Intuit AuthClient setup
 auth_client = AuthClient(
     client_id=os.environ.get("QB_CLIENT_ID"),
     client_secret=os.environ.get("QB_CLIENT_SECRET"),
-    redirect_uri="https://quickbooks-app-3.onrender.com/callback",  # ✅ MUST match exactly
+    redirect_uri="https://quickbooks-app-3.onrender.com/callback",
     environment="sandbox"
 )
 
@@ -30,10 +30,19 @@ def connect():
 def callback():
     auth_code = request.args.get('code')
     realm_id = request.args.get('realmId')
-    session['realm_id'] = realm_id
 
-    auth_client.get_bearer_token(auth_code)
-    session['access_token'] = auth_client.access_token
+    if not auth_code or not realm_id:
+        return "Missing authorization code or realm ID", 400
+
+    try:
+        auth_client.get_bearer_token(auth_code)
+        session['access_token'] = auth_client.access_token
+        session['realm_id'] = realm_id
+        print(f"Session after auth: {dict(session)}")
+    except Exception as e:
+        print(f"Error retrieving token: {e}")
+        return f"OAuth token error: {e}", 500
+
     return redirect('/')
 
 @app.route('/forecast', methods=['POST'])
@@ -41,6 +50,7 @@ def forecast():
     try:
         access_token = session.get('access_token')
         realm_id = session.get('realm_id')
+
         if not access_token or not realm_id:
             return jsonify({'error': 'Not connected to QuickBooks'}), 401
 
@@ -50,7 +60,12 @@ def forecast():
         forecast_data = forecast_df.to_dict(orient='records')
         return jsonify(forecast_data)
     except Exception as e:
+        print(f"Forecasting error: {e}")
         return jsonify({'error': f'Forecasting failed: {str(e)}'}), 500
+
+@app.route('/health')
+def health():
+    return "OK", 200
 
 if __name__ == '__main__':
     app.run(debug=True)
