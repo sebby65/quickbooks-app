@@ -9,18 +9,19 @@ def home():
     return render_template('financial_dashboard.html', forecast=[])
 
 # Forecast generation route
-@app.route('/forecast')
+@app.route('/forecast', methods=['POST'])
 def forecast():
-    # Example QuickBooks-style data for testing
-    qb_data = {
-        "Rows": {
-            "Row": [
-                {"ColData": [{"value": "2024-01-01"}, {"value": "1000"}]},
-                {"ColData": [{"value": "2024-02-01"}, {"value": "1100"}]},
-                {"ColData": [{"value": "2024-03-01"}, {"value": "1200"}]},
-            ]
-        }
-    }
+    try:
+        qb_data = request.get_json()
+        df = transform_qb_to_df(qb_data)
+        forecast_df = generate_forecast(df)
+
+        data = forecast_df.to_dict(orient='records')
+        return jsonify(data)
+
+    except Exception as e:
+        return jsonify({'error': f'Forecasting failed: {str(e)}'}), 500
+
 
     # Transform and forecast
     df = transform_qb_to_df(qb_data)
