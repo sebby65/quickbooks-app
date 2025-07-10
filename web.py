@@ -9,7 +9,7 @@ import os
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "devsecret")
 
-# Intuit AuthClient setup
+# Hardcoded redirect URI to prevent mismatch
 auth_client = AuthClient(
     client_id=os.environ.get("QB_CLIENT_ID"),
     client_secret=os.environ.get("QB_CLIENT_SECRET"),
@@ -23,10 +23,10 @@ def dashboard():
 
 @app.route('/connect')
 def connect():
+    print("AUTH URL:", auth_client.redirect_uri)
     auth_url = auth_client.get_authorization_url([Scopes.ACCOUNTING])
     return redirect(auth_url)
 
-@app.route('/callback')
 @app.route('/callback')
 def callback():
     auth_code = request.args.get('code')
