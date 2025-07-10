@@ -23,9 +23,10 @@ def dashboard():
 
 @app.route('/connect')
 def connect():
-    print("AUTH URL:", auth_client.redirect_uri)
-    auth_url = auth_client.get_authorization_url([Scopes.ACCOUNTING])
+   auth_url = auth_client.get_authorization_url([Scopes.ACCOUNTING])
+    print("Generated AUTH URL:", auth_url)
     return redirect(auth_url)
+
 
 @app.route('/callback')
 def callback():
