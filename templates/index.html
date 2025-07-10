@@ -1,19 +1,46 @@
 <!-- templates/index.html -->
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
+    <meta charset="UTF-8">
     <title>Financial Forecast Dashboard</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 2rem;
+        }
+        h1 {
+            color: #333;
+        }
+        .error {
+            color: red;
+            margin-top: 1rem;
+        }
+        .plot {
+            margin-top: 2rem;
+        }
+        button {
+            padding: 0.5rem 1rem;
+            font-size: 1rem;
+            cursor: pointer;
+        }
+    </style>
 </head>
 <body>
     <h1>Financial Forecast Dashboard</h1>
+
     <form action="/forecast" method="post">
         <button type="submit">Generate Forecast</button>
     </form>
+
     {% if error %}
-        <p style="color: red;">Forecasting failed: {{ error }}</p>
+        <div class="error">⚠️ Forecasting failed: {{ error }}</div>
     {% endif %}
+
     {% if plot_url %}
-        <img src="data:image/png;base64,{{ plot_url }}">
+        <div class="plot">
+            <img src="data:image/png;base64,{{ plot_url }}" alt="Forecast Plot">
+        </div>
     {% endif %}
 </body>
 </html>
