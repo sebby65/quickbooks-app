@@ -34,4 +34,9 @@ def generate_forecast(df):
     forecast = forecast[['ds', 'yhat']].rename(columns={'ds': 'date', 'yhat': 'forecast'})
     forecast['date'] = forecast['date'].dt.strftime('%Y-%m')
     forecast['forecast'] = forecast['forecast'].round(2)
+
+    # Drop duplicates by date, keeping the latest forecast
+    forecast = forecast.drop_duplicates(subset='date', keep='last')
+
     return forecast
+
