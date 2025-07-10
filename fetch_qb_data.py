@@ -1,3 +1,4 @@
+# fetch_qb_data.py
 import requests
 
 def fetch_profit_and_loss(access_token, realm_id):
@@ -7,4 +8,6 @@ def fetch_profit_and_loss(access_token, realm_id):
         "Accept": "application/json"
     }
     response = requests.get(url, headers=headers)
+    response.raise_for_status()
     return response.json()
+
