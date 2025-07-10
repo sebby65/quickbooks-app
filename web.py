@@ -27,20 +27,24 @@ def connect():
     return redirect(auth_url)
 
 @app.route('/callback')
+@app.route('/callback')
 def callback():
     auth_code = request.args.get('code')
     realm_id = request.args.get('realmId')
 
     if not auth_code or not realm_id:
+        print("Missing code or realm ID.")
         return "Missing authorization code or realm ID", 400
 
     try:
+        print(f"Received code: {auth_code}, realm_id: {realm_id}")
         auth_client.get_bearer_token(auth_code)
         session['access_token'] = auth_client.access_token
         session['realm_id'] = realm_id
-        print(f"Session after auth: {dict(session)}")
+        print(f"Access token: {auth_client.access_token}")
+        print(f"Session set: {dict(session)}")
     except Exception as e:
-        print(f"Error retrieving token: {e}")
+        print(f"Token exchange failed: {e}")
         return f"OAuth token error: {e}", 500
 
     return redirect('/')
