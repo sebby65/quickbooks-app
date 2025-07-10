@@ -1,118 +1,31 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-    <meta charset="UTF-8">
-    <title>Clariqor Financial Forecasting</title>
-    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            margin: 0;
-            padding: 2rem;
-            background-color: #f7f8fa;
-        }
+    <title>Financial Dashboard</title>
+    <script>
+        async function generateForecast() {
+            const response = await fetch('/forecast', { method: 'POST' });
+            const data = await response.json();
+            const resultsDiv = document.getElementById('results');
+            resultsDiv.innerHTML = '';
 
-        h1 {
-            color: #222;
-            text-align: center;
+            if (data.error) {
+                resultsDiv.innerText = data.error;
+            } else {
+                const list = document.createElement('ul');
+                data.forEach(entry => {
+                    const item = document.createElement('li');
+                    item.innerText = `${entry.date}: $${entry.forecast}`;
+                    list.appendChild(item);
+                });
+                resultsDiv.appendChild(list);
+            }
         }
-
-        #forecastChart {
-            width: 100%;
-            max-width: 1200px;
-            margin: 2rem auto;
-        }
-
-        table {
-            width: 80%;
-            margin: 0 auto 4rem;
-            border-collapse: collapse;
-            box-shadow: 0 0 10px rgba(0,0,0,0.1);
-        }
-
-        th, td {
-            padding: 12px 20px;
-            text-align: center;
-            border-bottom: 1px solid #ddd;
-        }
-
-        th {
-            background-color: #2d2d2d;
-            color: white;
-        }
-
-        tr:nth-child(even) {
-            background-color: #f3f3f3;
-        }
-    </style>
+    </script>
 </head>
 <body>
-    <h1>Clariqor Forecast Dashboard</h1>
-
-    <div id="forecastChart"></div>
-
-    <table id="forecastTable">
-        <thead>
-            <tr>
-                <th>Date</th>
-                <th>Forecast</th>
-            </tr>
-        </thead>
-        <tbody></tbody>
-    </table>
-
-    <script>
-    document.addEventListener("DOMContentLoaded", () => {
-        const forecastTableBody = document.querySelector("#forecastTable tbody");
-        const chartDiv = document.getElementById('forecastChart');
-
-        function renderForecast(data) {
-            // Render Table
-            forecastTableBody.innerHTML = '';
-            data.forEach(row => {
-                const tr = document.createElement('tr');
-                tr.innerHTML = `<td>${row.date}</td><td>${row.forecast}</td>`;
-                forecastTableBody.appendChild(tr);
-            });
-
-            // Render Chart
-            const dates = data.map(row => row.date);
-            const values = data.map(row => row.forecast);
-
-            const trace = {
-                x: dates,
-                y: values,
-                mode: 'lines+markers',
-                type: 'scatter',
-                name: 'Forecast'
-            };
-
-            const layout = {
-                title: 'Financial Forecast',
-                xaxis: { title: 'Date' },
-                yaxis: { title: 'Forecast Amount ($)' }
-            };
-
-            Plotly.newPlot(chartDiv, [trace], layout);
-        }
-
-        // Auto-fetch + forecast on load
-        fetch('/get_qb_data')
-            .then(res => res.json())
-            .then(qbData => {
-                return fetch('/forecast', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(qbData)
-                });
-            })
-            .then(res => res.json())
-            .then(renderForecast)
-            .catch(err => {
-                console.error('Error:', err);
-                chartDiv.innerHTML = '<p style="color:red;">Forecasting failed. Check server logs.</p>';
-            });
-    });
-    </script>
+    <h1>Financial Forecast Dashboard</h1>
+    <button onclick="generateForecast()">Generate Forecast</button>
+    <div id="results"></div>
 </body>
 </html>
