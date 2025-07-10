@@ -13,8 +13,8 @@ app.secret_key = os.environ.get("FLASK_SECRET_KEY", "supersecret")  # Replace in
 auth_client = AuthClient(
     client_id=os.environ.get("QB_CLIENT_ID"),
     client_secret=os.environ.get("QB_CLIENT_SECRET"),
-    redirect_uri=os.environ.get("QB_REDIRECT_URI", "https://clariqor.com/callback"),
-    environment='production'
+    redirect_uri="https://quickbooks-app-3.onrender.com/callback",  # ✅ MUST match exactly
+    environment="sandbox"
 )
 
 @app.route('/')
