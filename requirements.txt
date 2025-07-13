@@ -10,3 +10,4 @@ intuit-oauth
 python-quickbooks
 openai
 plotly>=5.20.0
+intuitlib
