@@ -66,7 +66,7 @@ def forecast():
         session["forecast_error"] = "Missing access token or realm ID. Please connect to QuickBooks first."
         return redirect("/")
 
-    url = f"https://sandbox-quickbooks.api.intuit.com/v3/company/{realm_id}/query"
+    url = f"https://quickbooks.api.intuit.com/v3/company/{realm_id}/query"
     headers = {
         "Authorization": f"Bearer {access_token}",
         "Accept": "application/json",
