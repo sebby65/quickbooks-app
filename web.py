@@ -36,7 +36,7 @@ def index():
 @app.route("/connect")
 def connect():
     try:
-        auth_url = auth_client.get_authorization_url([Scopes.Accounting])
+        auth_url = auth_client.get_authorization_url([Scopes.ACCOUNTING])
         return redirect(auth_url)
     except Exception as e:
         return f"Error generating auth URL: {str(e)}", 500
