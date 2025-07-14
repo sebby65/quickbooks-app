@@ -1,12 +1,16 @@
 import os
 import json
 import requests
+import traceback
+import pandas as pd
 from flask import Flask, redirect, request, session, url_for, render_template
 from intuitlib.client import AuthClient
 from intuitlib.enums import Scopes
 from intuitlib.exceptions import AuthClientError
 from flask_session import Session
 from datetime import datetime, timedelta
+from transform_pnl_data import transform_qb_to_df, generate_forecast
+from fetch_qb_data import fetch_profit_and_loss
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "default_secret_key")
@@ -89,38 +93,24 @@ def forecast():
         session["forecast_error"] = "Missing access token or realm ID."
         return redirect(url_for('index'))
 
-    headers = {
-        "Authorization": f"Bearer {access_token}",
-        "Accept": "application/json"
-    }
+    try:
+        pnl_data = fetch_profit_and_loss(access_token, realm_id)
+        df = transform_qb_to_df(pnl_data)
 
-    def run_query(entity):
-        query = f"SELECT * FROM {entity}"
-        url = f"{BASE_URL}/v3/company/{realm_id}/query?query={query}"
-        response = requests.get(url, headers=headers)
-        if response.status_code == 200:
-            return response.json().get("QueryResponse", {}).get(entity, [])
-        return []
+        if df.empty:
+            raise ValueError("No financial data available to forecast.")
 
-    def filter_recent(transactions, key='TxnDate'):
-        cutoff_date = datetime.now() - timedelta(days=90)
-        return [
-            txn for txn in transactions
-            if key in txn and datetime.strptime(txn[key], "%Y-%m-%d") >= cutoff_date
-        ]
+        forecast_df = generate_forecast(df)
+        forecast = forecast_df['forecast'].iloc[-1]  # latest forecasted value
 
-    invoices = filter_recent(run_query("Invoice"))
-    expenses = filter_recent(run_query("Purchase"))
+        session["forecast"] = round(forecast, 2)
+        session["revenue"] = round(df['amount'].sum(), 2)
+        session["cost"] = "N/A"
+        session["invoice_count"] = len(df)
 
-    revenue = sum(inv.get("TotalAmt", 0) for inv in invoices)
-    cost = sum(exp.get("TotalAmt", 0) for exp in expenses)
-    net = revenue - cost
-    forecast = net / len(invoices) if invoices else 0
-
-    session["forecast"] = round(forecast, 2)
-    session["revenue"] = round(revenue, 2)
-    session["cost"] = round(cost, 2)
-    session["invoice_count"] = len(invoices)
+    except Exception as e:
+        session["forecast_error"] = f"Forecast failed: {str(e)}"
+        app.logger.error(traceback.format_exc())
 
     return redirect(url_for('index'))
 
