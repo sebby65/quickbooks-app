@@ -6,6 +6,7 @@ from intuitlib.client import AuthClient
 from intuitlib.enums import Scopes
 from intuitlib.exceptions import AuthClientError
 from flask_session import Session
+from datetime import datetime, timedelta
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "default_secret_key")
@@ -74,31 +75,10 @@ def callback():
     try:
         auth_client.get_bearer_token(auth_code)
         session['access_token'] = auth_client.access_token
-        session['refresh_token'] = auth_client.refresh_token
         session['realm_id'] = realm_id
         return redirect(url_for('index'))
     except AuthClientError as e:
         return f"Error getting bearer token: {e}"
-
-def refresh_access_token():
-    auth_client_data = session.get('auth_client')
-    if not auth_client_data or 'refresh_token' not in session:
-        return False
-
-    auth_client = AuthClient(
-        client_id=auth_client_data['client_id'],
-        client_secret=auth_client_data['client_secret'],
-        environment=auth_client_data['environment'],
-        redirect_uri=auth_client_data['redirect_uri'],
-    )
-
-    try:
-        auth_client.refresh(session['refresh_token'])
-        session['access_token'] = auth_client.access_token
-        session['refresh_token'] = auth_client.refresh_token
-        return True
-    except AuthClientError:
-        return False
 
 @app.route("/forecast", methods=['POST'])
 def forecast():
@@ -118,31 +98,28 @@ def forecast():
         query = f"SELECT * FROM {entity}"
         url = f"{BASE_URL}/v3/company/{realm_id}/query?query={query}"
         response = requests.get(url, headers=headers)
-
-        if response.status_code == 401:
-            if refresh_access_token():
-                headers["Authorization"] = f"Bearer {session['access_token']}"
-                response = requests.get(url, headers=headers)
-
         if response.status_code == 200:
             return response.json().get("QueryResponse", {}).get(entity, [])
         return []
 
-    invoices = run_query("Invoice")
-    expenses = run_query("Purchase")
+    def filter_recent(transactions, key='TxnDate'):
+        cutoff_date = datetime.now() - timedelta(days=90)
+        return [
+            txn for txn in transactions
+            if key in txn and datetime.strptime(txn[key], "%Y-%m-%d") >= cutoff_date
+        ]
 
-    print("Invoices fetched:", invoices)
-    print("Expenses fetched:", expenses)
+    invoices = filter_recent(run_query("Invoice"))
+    expenses = filter_recent(run_query("Purchase"))
 
     revenue = sum(inv.get("TotalAmt", 0) for inv in invoices)
     cost = sum(exp.get("TotalAmt", 0) for exp in expenses)
-
     net = revenue - cost
     forecast = net / len(invoices) if invoices else 0
 
-    session["forecast"] = f"{forecast:,.2f}"
-    session["revenue"] = f"{revenue:,.2f}"
-    session["cost"] = f"{cost:,.2f}"
+    session["forecast"] = round(forecast, 2)
+    session["revenue"] = round(revenue, 2)
+    session["cost"] = round(cost, 2)
     session["invoice_count"] = len(invoices)
 
     return redirect(url_for('index'))
