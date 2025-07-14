@@ -1,6 +1,6 @@
 import pandas as pd
-from prophet import Prophet
 from datetime import datetime
+from prophet import Prophet
 
 def transform_qb_to_df(qb_data):
     def extract_rows(rows, data):
@@ -10,10 +10,9 @@ def transform_qb_to_df(qb_data):
                     label = row['ColData'][0].get('value')
                     amount = row['ColData'][1].get('value')
                     amount = float(amount.replace(',', '')) if amount else 0.0
-                    # Fake a date for now based on order of entries
                     data.append({'label': label, 'amount': amount})
                 except Exception as e:
-                    print(f"Row parsing error: {e} — {row}")
+                    continue
             elif 'Rows' in row:
                 extract_rows(row['Rows'].get('Row', []), data)
 
@@ -26,17 +25,14 @@ def transform_qb_to_df(qb_data):
 
     df = pd.DataFrame(data)
     df['date'] = pd.date_range(end=datetime.today(), periods=len(df), freq='M')
-    df = df[['date', 'amount']]
-    return df
-
+    return df[['date', 'amount']]
 
 def generate_forecast(df):
-    prophet_df = df.rename(columns={'date': 'ds', 'amount': 'y'})
+    df = df.rename(columns={'date': 'ds', 'amount': 'y'})
     model = Prophet()
-    model.fit(prophet_df)
+    model.fit(df)
     future = model.make_future_dataframe(periods=12, freq='M')
     forecast = model.predict(future)
     forecast = forecast[['ds', 'yhat']].rename(columns={'ds': 'date', 'yhat': 'forecast'})
-    forecast['date'] = forecast['date'].dt.strftime('%Y-%m')
     forecast['forecast'] = forecast['forecast'].round(2)
     return forecast
