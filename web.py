@@ -140,9 +140,9 @@ def forecast():
     net = revenue - cost
     forecast = net / len(invoices) if invoices else 0
 
-    session["forecast"] = round(forecast, 2)
-    session["revenue"] = round(revenue, 2)
-    session["cost"] = round(cost, 2)
+    session["forecast"] = f"{forecast:,.2f}"
+    session["revenue"] = f"{revenue:,.2f}"
+    session["cost"] = f"{cost:,.2f}"
     session["invoice_count"] = len(invoices)
 
     return redirect(url_for('index'))
