@@ -1,107 +1,107 @@
 import os
-import io
-import base64
+import json
 import requests
-import pandas as pd
-import matplotlib.pyplot as plt
-from flask import Flask, request, redirect, session, render_template
+from flask import Flask, redirect, request, session, url_for, render_template
 from intuitlib.client import AuthClient
 from intuitlib.enums import Scopes
-from dotenv import load_dotenv
-
-load_dotenv()  # For local dev; has no effect in Render
+from intuitlib.exceptions import AuthClientError
+from flask_session import Session
 
 app = Flask(__name__)
-app.secret_key = os.getenv("FLASK_SECRET_KEY")
+app.secret_key = os.environ.get("FLASK_SECRET_KEY", "default_secret_key")
 
-# OAuth credentials
-client_id = os.getenv("QB_CLIENT_ID")
-client_secret = os.getenv("QB_CLIENT_SECRET")
-redirect_uri = os.getenv("REDIRECT_URI")
-environment = os.getenv("QB_ENVIRONMENT", "sandbox")
+# Configure server-side session
+app.config['SESSION_TYPE'] = 'filesystem'
+Session(app)
 
-auth_client = AuthClient(
-    client_id=client_id,
-    client_secret=client_secret,
-    environment=environment,
-    redirect_uri=redirect_uri
-)
+# QuickBooks API credentials
+CLIENT_ID = os.environ.get("QB_CLIENT_ID")
+CLIENT_SECRET = os.environ.get("QB_CLIENT_SECRET")
+REDIRECT_URI = os.environ.get("QB_REDIRECT_URI")
+ENVIRONMENT = os.environ.get("QB_ENVIRONMENT", "production")  # 'sandbox' or 'production'
+
+# Select base URL based on environment
+if ENVIRONMENT == "sandbox":
+    BASE_URL = "https://sandbox-quickbooks.api.intuit.com"
+else:
+    BASE_URL = "https://quickbooks.api.intuit.com"
 
 @app.route("/")
 def index():
-    error = session.pop("forecast_error", None)
-    plot_url = session.pop("plot_url", None)
-    return render_template("index.html", error=error, plot_url=plot_url)
+    return render_template("index.html")
 
 @app.route("/connect")
 def connect():
+    auth_client = AuthClient(
+        client_id=CLIENT_ID,
+        client_secret=CLIENT_SECRET,
+        environment=ENVIRONMENT,
+        redirect_uri=REDIRECT_URI,
+    )
     try:
         auth_url = auth_client.get_authorization_url([Scopes.ACCOUNTING])
+        session['auth_client'] = {
+            'client_id': CLIENT_ID,
+            'client_secret': CLIENT_SECRET,
+            'redirect_uri': REDIRECT_URI,
+            'environment': ENVIRONMENT
+        }
         return redirect(auth_url)
-    except Exception as e:
-        return f"Error generating auth URL: {str(e)}", 500
+    except AuthClientError as e:
+        return f"Error generating auth URL: {e}"
 
 @app.route("/callback")
 def callback():
-    code = request.args.get("code")
-    realm_id = request.args.get("realmId")
+    auth_client_data = session.get('auth_client')
+    if not auth_client_data:
+        return redirect(url_for('index'))
 
-    if not code or not realm_id:
-        return "Missing code or realmId", 400
+    auth_client = AuthClient(
+        client_id=auth_client_data['client_id'],
+        client_secret=auth_client_data['client_secret'],
+        environment=auth_client_data['environment'],
+        redirect_uri=auth_client_data['redirect_uri'],
+    )
+
+    auth_code = request.args.get('code')
+    realm_id = request.args.get('realmId')
 
     try:
-        auth_client.get_bearer_token(code)
-        session["access_token"] = auth_client.access_token
-        session["realm_id"] = realm_id
-        return redirect("/")
-    except Exception as e:
-        return f"Auth failed: {str(e)}", 500
+        auth_client.get_bearer_token(auth_code)
+        session['access_token'] = auth_client.access_token
+        session['realm_id'] = realm_id
+        return redirect(url_for('index'))
+    except AuthClientError as e:
+        return f"Error getting bearer token: {e}"
 
-@app.route("/forecast", methods=["POST"])
+@app.route("/forecast", methods=['POST'])
 def forecast():
-    access_token = session.get("access_token")
-    realm_id = session.get("realm_id")
+    access_token = session.get('access_token')
+    realm_id = session.get('realm_id')
 
     if not access_token or not realm_id:
-        session["forecast_error"] = "Missing access token or realm ID. Please connect to QuickBooks first."
-        return redirect("/")
+        return redirect(url_for('connect'))
 
-    url = f"https://quickbooks.api.intuit.com/v3/company/{realm_id}/query"
+    query = "SELECT * FROM Invoice"
+    url = f"{BASE_URL}/v3/company/{realm_id}/query?query={query}"
     headers = {
         "Authorization": f"Bearer {access_token}",
-        "Accept": "application/json",
-        "Content-Type": "application/text"
+        "Accept": "application/json"
     }
-    query = "SELECT TxnDate, TotalAmt FROM Invoice"
 
-    try:
-        response = requests.post(url, headers=headers, data=query)
-        response.raise_for_status()
+    response = requests.get(url, headers=headers)
 
-        invoices = response.json().get("QueryResponse", {}).get("Invoice", [])
+    if response.status_code == 200:
+        data = response.json()
+        invoices = data.get("QueryResponse", {}).get("Invoice", [])
         if not invoices:
-            raise ValueError("No invoice data returned. Ensure your sandbox account has invoice data.")
+            return render_template("index.html", error="No invoice data returned. Ensure your QuickBooks account has invoice data.")
 
-        df = pd.DataFrame(invoices)
-        df["TxnDate"] = pd.to_datetime(df["TxnDate"])
-        df = df.sort_values("TxnDate")
-        df = df.groupby("TxnDate").sum().reset_index()
+        amounts = [inv.get("TotalAmt", 0) for inv in invoices]
+        average = sum(amounts) / len(amounts)
+        return render_template("index.html", forecast=round(average, 2))
+    else:
+        return render_template("index.html", error=f"Forecasting failed: {response.status_code} {response.reason} for url: {url}")
 
-        plt.figure(figsize=(10, 5))
-        plt.plot(df["TxnDate"], df["TotalAmt"], marker="o")
-        plt.title("Financial Forecast")
-        plt.xlabel("Date")
-        plt.ylabel("Total Amount")
-        plt.grid(True)
-        plt.tight_layout()
-
-        img = io.BytesIO()
-        plt.savefig(img, format="png")
-        img.seek(0)
-        plot_url = base64.b64encode(img.read()).decode("utf-8")
-        session["plot_url"] = plot_url
-
-    except Exception as e:
-        session["forecast_error"] = str(e)
-
-    return redirect("/")
+if __name__ == '__main__':
+    app.run(debug=True)
