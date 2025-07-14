@@ -54,6 +54,12 @@ def callback():
     if not auth_client_data:
         return redirect(url_for('index'))
     try:
+        auth_client = AuthClient(
+            client_id=CLIENT_ID,
+            client_secret=CLIENT_SECRET,
+            environment=ENVIRONMENT,
+            redirect_uri=REDIRECT_URI
+        )
         auth_client.get_bearer_token(request.args.get('code'))
         session['access_token'] = auth_client.access_token
         session['realm_id'] = request.args.get('realmId')
