@@ -17,7 +17,7 @@ Session(app)
 # QuickBooks API credentials
 CLIENT_ID = os.environ.get("QB_CLIENT_ID")
 CLIENT_SECRET = os.environ.get("QB_CLIENT_SECRET")
-REDIRECT_URI = os.environ.get("QB_REDIRECT_URI")
+REDIRECT_URI = os.environ.get("REDIRECT_URI")
 ENVIRONMENT = os.environ.get("QB_ENVIRONMENT", "production")  # 'sandbox' or 'production'
 
 # Select base URL based on environment
