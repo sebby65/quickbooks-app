@@ -28,7 +28,9 @@ else:
 
 @app.route("/")
 def index():
-    return render_template("index.html")
+    error = session.pop("forecast_error", None)
+    forecast = session.pop("forecast", None)
+    return render_template("index.html", error=error, forecast=forecast)
 
 @app.route("/connect")
 def connect():
@@ -80,29 +82,36 @@ def forecast():
     realm_id = session.get('realm_id')
 
     if not access_token or not realm_id:
-        return redirect(url_for('connect'))
+        session["forecast_error"] = "Missing access token or realm ID."
+        return redirect(url_for('index'))
 
-    query = "SELECT * FROM Invoice"
-    url = f"{BASE_URL}/v3/company/{realm_id}/query?query={query}"
     headers = {
         "Authorization": f"Bearer {access_token}",
         "Accept": "application/json"
     }
 
-    response = requests.get(url, headers=headers)
+    def run_query(entity):
+        query = f"SELECT * FROM {entity}"
+        url = f"{BASE_URL}/v3/company/{realm_id}/query?query={query}"
+        response = requests.get(url, headers=headers)
+        if response.status_code == 200:
+            return response.json().get("QueryResponse", {}).get(entity, [])
+        return []
 
-    if response.status_code == 200:
-        data = response.json()
-        invoices = data.get("QueryResponse", {}).get("Invoice", [])
-        print("Invoices fetched:", invoices)
-        if not invoices:
-            return render_template("index.html", error="No invoice data returned. Ensure your QuickBooks account has invoice data.")
+    invoices = run_query("Invoice")
+    expenses = run_query("Purchase")
 
-        amounts = [inv.get("TotalAmt", 0) for inv in invoices]
-        average = sum(amounts) / len(amounts)
-        return render_template("index.html", forecast=round(average, 2))
-    else:
-        return render_template("index.html", error=f"Forecasting failed: {response.status_code} {response.reason} for url: {url}")
+    print("Invoices fetched:", invoices)
+    print("Expenses fetched:", expenses)
+
+    revenue = sum(inv.get("TotalAmt", 0) for inv in invoices)
+    cost = sum(exp.get("TotalAmt", 0) for exp in expenses)
+
+    net = revenue - cost
+    forecast = net / len(invoices) if invoices else 0
+
+    session["forecast"] = round(forecast, 2)
+    return redirect(url_for('index'))
 
 if __name__ == '__main__':
     app.run(debug=True)
