@@ -31,6 +31,13 @@
 
     <form action="/forecast" method="post">
         <button type="submit">Generate Forecast</button>
+{% if forecast %}
+  <h2>Average Monthly Net Income Forecast: ${{ forecast }}</h2>
+{% endif %}
+
+{% if error %}
+  <p style="color: red;">{{ error }}</p>
+{% endif %}
     </form>
 
     {% if error %}
