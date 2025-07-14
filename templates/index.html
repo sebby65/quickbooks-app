@@ -1,47 +1,62 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Financial Dashboard</title>
-    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <title>Clariqor Financial Dashboard</title>
     <style>
-        body { font-family: sans-serif; padding: 2rem; }
-        h1 { font-size: 2rem; margin-bottom: 1rem; }
-        .message { font-size: 1.2rem; margin-top: 1rem; }
-        .positive { color: green; }
-        .neutral { color: orange; }
-        .negative { color: red; }
-    </style>
-    <script>
-        async function generateForecast() {
-            const response = await fetch('/forecast', { method: 'POST' });
-            window.location.reload();
+        body {
+            font-family: Arial, sans-serif;
+            margin: 40px;
         }
-    </script>
+        .feedback {
+            font-weight: bold;
+            margin-top: 20px;
+        }
+        .feedback.positive { color: green; }
+        .feedback.warning { color: orange; }
+        .feedback.negative { color: red; }
+    </style>
 </head>
 <body>
     <h1>Financial Forecast Dashboard</h1>
-    <form method="POST" action="/forecast">
+
+    <form method="POST" action="/forecast?range=12">
+        <label>Forecast Range:</label>
+        <select name="range" onchange="this.form.action='/forecast?range=' + this.value">
+            <option value="3">Last 3 months</option>
+            <option value="6">Last 6 months</option>
+            <option value="12" selected>Last 12 months</option>
+        </select>
         <button type="submit">Generate Forecast</button>
     </form>
 
     {% if error %}
-        <p class="message negative">{{ error }}</p>
-    {% elif forecast is not none %}
-        <div class="message">
-            {% if forecast < 0 %}
-                <p class="negative">Warning: Expenses exceed income. Consider trimming costs.</p>
-            {% elif forecast < 500 %}
-                <p class="neutral">You're slightly profitable. Let’s look at scaling revenue.</p>
-            {% else %}
-                <p class="positive">Great job! You're generating healthy cash flow.</p>
-            {% endif %}
-        </div>
+        <p class="feedback negative">Forecast failed: {{ error }}</p>
+    {% endif %}
+
+    {% if forecast is not none %}
+        {% if forecast < 0 %}
+            <p class="feedback negative">Warning: Expenses exceed income. Consider trimming costs.</p>
+        {% elif forecast < 500 %}
+            <p class="feedback warning">You're slightly profitable. Let’s look at scaling revenue.</p>
+        {% else %}
+            <p class="feedback positive">Great job! You're generating healthy cash flow.</p>
+        {% endif %}
+
         <ul>
             <li><strong>Forecast:</strong> ${{ forecast }}</li>
             <li><strong>Total Revenue:</strong> ${{ revenue }}</li>
             <li><strong>Total Expenses:</strong> {{ cost }}</li>
             <li><strong>Invoice Count:</strong> {{ invoice_count }}</li>
         </ul>
+
+        <form action="/download">
+            <button type="submit">Download Forecast CSV</button>
+        </form>
+
+        <form action="/email" method="POST">
+            <input name="email" type="email" placeholder="Enter email to receive report" required>
+            <button type="submit">Email Me This Report</button>
+        </form>
     {% endif %}
 </body>
 </html>
