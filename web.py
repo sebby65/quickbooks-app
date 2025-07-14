@@ -94,6 +94,7 @@ def forecast():
     if response.status_code == 200:
         data = response.json()
         invoices = data.get("QueryResponse", {}).get("Invoice", [])
+        print("Invoices fetched:", invoices)
         if not invoices:
             return render_template("index.html", error="No invoice data returned. Ensure your QuickBooks account has invoice data.")
 
