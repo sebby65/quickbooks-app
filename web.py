@@ -30,7 +30,10 @@ else:
 def index():
     error = session.pop("forecast_error", None)
     forecast = session.pop("forecast", None)
-    return render_template("index.html", error=error, forecast=forecast)
+    revenue = session.pop("revenue", None)
+    cost = session.pop("cost", None)
+    invoice_count = session.pop("invoice_count", None)
+    return render_template("index.html", error=error, forecast=forecast, revenue=revenue, cost=cost, invoice_count=invoice_count)
 
 @app.route("/connect")
 def connect():
@@ -111,6 +114,10 @@ def forecast():
     forecast = net / len(invoices) if invoices else 0
 
     session["forecast"] = round(forecast, 2)
+    session["revenue"] = round(revenue, 2)
+    session["cost"] = round(cost, 2)
+    session["invoice_count"] = len(invoices)
+
     return redirect(url_for('index'))
 
 if __name__ == '__main__':
