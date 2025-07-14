@@ -1,23 +1,68 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
+    <meta charset="UTF-8">
     <title>Clariqor Financial Dashboard</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <style>
         body {
-            font-family: Arial, sans-serif;
-            margin: 40px;
+            font-family: "Segoe UI", sans-serif;
+            margin: 20px;
+            padding: 0;
+            background: #f9f9f9;
         }
+
+        header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+
+        header img {
+            height: 60px;
+        }
+
+        h1 {
+            color: #222;
+            margin-bottom: 10px;
+        }
+
+        form, .feedback, ul, footer {
+            max-width: 600px;
+            margin: 0 auto 20px auto;
+            text-align: center;
+        }
+
+        select, input, button {
+            padding: 10px;
+            margin: 8px;
+            font-size: 1rem;
+        }
+
         .feedback {
             font-weight: bold;
-            margin-top: 20px;
         }
-        .feedback.positive { color: green; }
-        .feedback.warning { color: orange; }
-        .feedback.negative { color: red; }
+
+        .positive { color: green; }
+        .warning { color: orange; }
+        .negative { color: red; }
+
+        footer {
+            font-size: 0.9rem;
+            color: #666;
+            margin-top: 40px;
+        }
+
+        @media (max-width: 600px) {
+            h1 { font-size: 1.5rem; }
+            button, select, input { width: 100%; margin-top: 10px; }
+        }
     </style>
 </head>
 <body>
-    <h1>Financial Forecast Dashboard</h1>
+    <header>
+        <img src="/static/logo.png" alt="Clariqor Logo">
+        <h1>Clariqor Financial Dashboard</h1>
+    </header>
 
     <form method="POST" action="/forecast?range=12">
         <label>Forecast Range:</label>
@@ -42,7 +87,7 @@
             <p class="feedback positive">Great job! You're generating healthy cash flow.</p>
         {% endif %}
 
-        <ul>
+        <ul style="list-style: none; padding: 0;">
             <li><strong>Forecast:</strong> ${{ forecast }}</li>
             <li><strong>Total Revenue:</strong> ${{ revenue }}</li>
             <li><strong>Total Expenses:</strong> {{ cost }}</li>
@@ -58,5 +103,9 @@
             <button type="submit">Email Me This Report</button>
         </form>
     {% endif %}
+
+    <footer>
+        © 2025 Clariqor — Empowering business clarity from your books.
+    </footer>
 </body>
 </html>
