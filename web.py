@@ -35,7 +35,12 @@ def index():
 
 @app.route("/connect")
 def connect():
-    auth_client = AuthClient(CLIENT_ID, CLIENT_SECRET, ENVIRONMENT, REDIRECT_URI)
+    auth_client = AuthClient(
+    client_id=CLIENT_ID,
+    client_secret=CLIENT_SECRET,
+    environment=ENVIRONMENT,
+    redirect_uri=REDIRECT_URI
+)
     try:
         auth_url = auth_client.get_authorization_url([Scopes.ACCOUNTING])
         session['auth_client'] = auth_client.__dict__
@@ -48,7 +53,6 @@ def callback():
     auth_client_data = session.get('auth_client')
     if not auth_client_data:
         return redirect(url_for('index'))
-    auth_client = AuthClient(**auth_client_data)
     try:
         auth_client.get_bearer_token(request.args.get('code'))
         session['access_token'] = auth_client.access_token
