@@ -1,5 +1,6 @@
 import pandas as pd
 from prophet import Prophet
+from datetime import datetime
 
 def transform_qb_to_df(qb_data):
     def extract_rows(rows, data):
