@@ -6,6 +6,7 @@ from intuitlib.client import AuthClient
 from intuitlib.enums import Scopes
 from intuitlib.exceptions import AuthClientError
 from flask_session import Session
+from datetime import datetime
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "default_secret_key")
@@ -104,6 +105,12 @@ def forecast():
     invoices = run_query("Invoice")
     expenses = run_query("Purchase")
 
+    today = datetime.today().date()
+    invoices = [
+        inv for inv in invoices
+        if 'TxnDate' in inv and datetime.strptime(inv['TxnDate'], '%Y-%m-%d').date() <= today
+    ]
+
     print("Invoices fetched:", invoices)
     print("Expenses fetched:", expenses)
 
@@ -111,12 +118,13 @@ def forecast():
     cost = sum(exp.get("TotalAmt", 0) for exp in expenses)
 
     net = revenue - cost
-    forecast = net / len(invoices) if invoices else 0
+    invoice_count = len(invoices)
+    forecast = net / invoice_count if invoice_count else 0.0
 
     session["forecast"] = round(forecast, 2)
     session["revenue"] = round(revenue, 2)
     session["cost"] = round(cost, 2)
-    session["invoice_count"] = len(invoices)
+    session["invoice_count"] = invoice_count
 
     return redirect(url_for('index'))
 
