@@ -83,7 +83,7 @@ def forecast():
 
     if not access_token or not realm_id:
         session["forecast_error"] = "Missing access token or realm ID."
-        return redirect(url_for('index'))
+        return render_template("index.html", forecast=round(net_average, 2))
 
     headers = {
         "Authorization": f"Bearer {access_token}",
