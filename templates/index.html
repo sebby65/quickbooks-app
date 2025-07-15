@@ -1,15 +1,49 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <meta charset="utf-8">
-  <title>Clariqor Dashboard</title>
+  <meta charset="UTF-8" />
+  <title>Clariqor Financial Forecast</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <style>/* similar CSS + status positioning here */</style>
+  <style>
+    body { font-family: sans-serif; padding: 2rem; max-width: 800px; margin: auto; }
+    h1 { font-size: 2.5rem; margin-bottom: 1rem; }
+    select, button, input[type=email] {
+      display: block; margin: 1rem 0; padding: 0.6rem; width: 100%;
+      font-size: 1rem; border-radius: 5px; border: 1px solid #ccc;
+    }
+    .warning { color: red; font-weight: bold; }
+    footer { text-align: center; margin-top: 3rem; font-size: 0.9rem; color: #888; }
+  </style>
 </head>
 <body>
-  <h1>Clariqor Forecast</h1>
-  <!-- forms unchanged -->
+  <h1>Clariqor Financial Forecast</h1>
+
+  <!-- Time Range Form -->
+  <form method="POST" action="/forecast">
+    <label for="range">Time Range</label>
+    <select id="range" name="range">
+      <option value="3">Last 3 Months</option>
+      <option value="6">Last 6 Months</option>
+      <option value="12" selected>Last 12 Months</option>
+    </select>
+    <button type="submit">Generate Forecast</button>
+  </form>
+
+  <!-- Forecast Output -->
+  {% if forecast %}
+    {% if forecast < 0 %}
+      <p class="warning">Warning: Expenses exceed income.</p>
+    {% endif %}
+    <ul>
+      <li><strong>Forecast:</strong> ${{ "%.2f"|format(forecast) }}</li>
+      <li><strong>Revenue:</strong> ${{ "%.2f"|format(revenue) }}</li>
+      <li><strong>Expenses:</strong> {{ "%.2f"|format(expenses) if expenses is not none else 'N/A' }}</li>
+      <li><strong>Invoice Count:</strong> {{ invoice_count }}</li>
+    </ul>
+  {% endif %}
+
+  <!-- Chart -->
   {% if chart_data %}
     <canvas id="forecastChart" width="400" height="200"></canvas>
     <script>
@@ -17,14 +51,28 @@
       new Chart(document.getElementById("forecastChart"), {
         type: 'line',
         data: {
-          labels: data.map(r=> r.ds.split("T")[0]),
-          datasets: [{label:'Actual', data:data.map(r=>r.y)},
-                     {label:'Forecast', data:data.map(r=>r.forecast)}]
+          labels: data.map(r => r.ds.split("T")[0]),
+          datasets: [
+            { label: 'Actual', data: data.map(r => r.y), borderColor: 'blue' },
+            { label: 'Forecast', data: data.map(r => r.forecast), borderColor: 'green' }
+          ]
         }
       });
     </script>
   {% endif %}
 
+  <!-- CSV Download -->
+  <form method="GET" action="/download">
+    <button type="submit">Download CSV</button>
+  </form>
+
+  <!-- Email Report -->
+  <form method="POST" action="/email">
+    <input type="email" name="email" placeholder="you@example.com" required>
+    <button type="submit">Email Me This Report</button>
+  </form>
   {% if email_status %}<p>{{ email_status }}</p>{% endif %}
+
+  <footer>© 2025 Clariqor — Clarity from your QuickBooks</footer>
 </body>
 </html>
