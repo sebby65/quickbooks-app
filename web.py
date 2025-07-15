@@ -51,14 +51,21 @@ def callback():
 
 @app.route("/forecast", methods=["POST"])
 def forecast():
-    months = int(request.form.get("range", 12))
+    months = int(request.args.get("range", 12))
     client = QuickBooks(
         auth_client=auth_client,
         refresh_token=auth_client.refresh_token,
         company_id=REALM_ID,
     )
-    raw_data = fetch_qb_data(auth_client, REALM_ID)
+    raw_data = fetch_qb_data(client, REALM_ID)
     df = transform_qb_to_df(raw_data)
+
+    print("DataFrame Columns:", df.columns)
+    print("DataFrame Sample:\n", df.head())
+
+    if "ds" not in df.columns or "y" not in df.columns:
+        return "Data transformation failed: Missing 'ds' or 'y' column.", 500
+
     df = df.sort_values("ds").tail(months)
 
     model = Prophet()
@@ -71,7 +78,8 @@ def forecast():
     app.config["forecast_df"] = merged
 
     chart_data = merged.to_dict("records")
-    return render_template("financial_dashboard (2).html", chart_data=chart_data)
+    return render_template("financial_dashboard.html", chart_data=chart_data)
+
 
 @app.route("/download")
 def download():
