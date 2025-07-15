@@ -3,7 +3,6 @@ from flask import Flask, render_template, request, redirect, send_file
 from intuitlib.client import AuthClient
 from intuitlib.enums import Scopes
 from quickbooks import QuickBooks
-from quickbooks.objects.report import ProfitAndLoss
 import pandas as pd
 from prophet import Prophet
 from io import BytesIO
