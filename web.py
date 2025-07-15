@@ -1,12 +1,13 @@
 import os
-from flask import Flask, render_template, request, redirect, send_file
+from flask import Flask, render_template, request, jsonify, send_file
+from dotenv import load_dotenv
 from intuitlib.client import AuthClient
 from intuitlib.enums import Scopes
 from quickbooks import QuickBooks
-import pandas as pd
 from prophet import Prophet
+import pandas as pd
 from io import BytesIO
-from dotenv import load_dotenv
+
 from fetch_qb_data import fetch_qb_data
 from transform_pnl_data import transform_qb_to_df
 from email_utils import send_forecast_email
@@ -29,42 +30,48 @@ except Exception as e:
 
 @app.route("/")
 def home():
-    return render_template("index.html")
+    return render_template("financial_dashboard (2).html")
 
 @app.route("/connect")
 def connect():
     auth_url = auth_client.get_authorization_url([Scopes.ACCOUNTING])
-    return redirect(auth_url)
+    return jsonify({'auth_url': auth_url})
 
 @app.route("/callback")
 def callback():
-    auth_client.get_bearer_token(request.args.get('code'))
-    return redirect("/")
+    code = request.args.get('code')
+    auth_client.get_bearer_token(code)
+    return jsonify({'status': 'connected'})
 
 @app.route("/forecast", methods=["POST"])
 def forecast():
-    months = int(request.args.get("range", 12))
-    raw_data = fetch_qb_data(auth_client, REALM_ID)
-    df = transform_qb_to_df(raw_data)
-    df = df.sort_values("ds").tail(months)
+    try:
+        client = QuickBooks(
+            auth_client=auth_client,
+            refresh_token=auth_client.refresh_token,
+            company_id=REALM_ID,
+        )
+        pnl_data = fetch_qb_data(client)
+        df = transform_qb_to_df(pnl_data)
 
-    model = Prophet()
-    model.fit(df[["ds", "y"]])
-    future = model.make_future_dataframe(periods=months, freq="M")
-    forecast = model.predict(future)
+        model = Prophet()
+        model.fit(df.rename(columns={"ds": "ds", "y": "y"}))
+        future = model.make_future_dataframe(periods=12, freq="M")
+        forecast = model.predict(future)
 
-    merged = pd.merge(df, forecast[["ds", "yhat"]], on="ds", how="left")
-    merged.rename(columns={"yhat": "forecast"}, inplace=True)
-    app.config["forecast_df"] = merged
+        forecast_data = forecast[["ds", "yhat"]].rename(columns={"ds": "date", "yhat": "forecast"})
+        forecast_data["date"] = forecast_data["date"].dt.strftime('%Y-%m')
 
-    chart_data = merged.to_dict("records")
-    return render_template("index.html", chart_data=chart_data)
+        app.config["forecast_df"] = forecast_data
+        return jsonify(forecast_data.to_dict(orient="records"))
+    except Exception as e:
+        return jsonify({"error": str(e)})
 
 @app.route("/download")
 def download():
     df = app.config.get("forecast_df")
     if df is None:
-        return "No forecast to download", 400
+        return "No forecast available to download.", 400
     output = BytesIO()
     df.to_csv(output, index=False)
     output.seek(0)
@@ -74,10 +81,13 @@ def download():
 def email():
     df = app.config.get("forecast_df")
     if df is None:
-        return "No forecast to email", 400
+        return "No forecast available to email.", 400
     to_email = request.form.get("email", os.getenv("EMAIL_RECEIVER"))
-    status = send_forecast_email(to_email, df)
-    return render_template("index.html", email_status=status)
+    try:
+        send_forecast_email(to_email, df)
+        return render_template("form (2).html", email_status="Email sent successfully.")
+    except Exception as e:
+        return render_template("form (2).html", email_status=f"Failed to send email: {e}")
 
 if __name__ == "__main__":
     app.run(debug=True)
