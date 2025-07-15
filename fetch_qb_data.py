@@ -1,13 +1,14 @@
-# fetch_qb_data.py
-import requests
+def fetch_qb_data(auth_client, realm_id):
+    from quickbooks import QuickBooks
+    from intuitlib.client import AuthClient
+    
+    client = QuickBooks(
+        auth_client=auth_client,
+        refresh_token=auth_client.refresh_token,
+        company_id=realm_id,
+    )
+    # Replace with your actual report-fetching logic
+    report = client.get_report("ProfitAndLoss", start_date="2020-01-01", end_date="2025-01-01")
+    return report  # or the raw JSON/data structure your transformer expects
 
-def fetch_profit_and_loss(access_token, realm_id):
-    url = f"https://quickbooks.api.intuit.com/v3/company/{realm_id}/reports/ProfitAndLoss?minorversion=65"
-    headers = {
-        "Authorization": f"Bearer {access_token}",
-        "Accept": "application/json"
-    }
-    response = requests.get(url, headers=headers)
-    response.raise_for_status()
-    return response.json()
 
