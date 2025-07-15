@@ -3,13 +3,13 @@ from flask import Flask, render_template, request, redirect, send_file
 from intuitlib.client import AuthClient
 from intuitlib.enums import Scopes
 from quickbooks import QuickBooks
+from quickbooks.reports import Report  # ✅ correct import
 import pandas as pd
 from prophet import Prophet
 from io import BytesIO
 from dotenv import load_dotenv
 from transform_pnl_data import transform_qb_to_df
 from email_utils import send_forecast_email
-from quickbooks.reports.profit_and_loss import ProfitAndLoss
 
 load_dotenv()
 app = Flask(__name__)
@@ -49,9 +49,8 @@ def forecast():
         refresh_token=auth_client.refresh_token,
         company_id=REALM_ID,
     )
-    pnl = ProfitAndLoss()
-    pnl_data = pnl.get(client)
-    df = transform_qb_to_df(pnl_data)
+    report_data = Report.get("ProfitAndLoss", qb=client)  # ✅ dynamic report access
+    df = transform_qb_to_df(report_data)
     df = df.sort_values("ds").tail(months)
 
     model = Prophet()
