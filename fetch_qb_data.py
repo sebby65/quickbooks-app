@@ -1,5 +1,4 @@
 import requests
-import pandas as pd
 
 def fetch_qb_data(auth_client, realm_id):
     access_token = auth_client.access_token
@@ -11,4 +10,6 @@ def fetch_qb_data(auth_client, realm_id):
     url = f"https://quickbooks.api.intuit.com/v3/company/{realm_id}/reports/ProfitAndLoss?date_macro=LastYear"
 
     response = requests.get(url, headers=headers)
+    print("QuickBooks API Response:", response.text)  # <-- Add this
+
     return response.json()
