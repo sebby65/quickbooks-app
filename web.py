@@ -17,7 +17,7 @@ app.secret_key = os.getenv("FLASK_SECRET_KEY")
 CLIENT_ID = os.getenv("QB_CLIENT_ID")
 CLIENT_SECRET = os.getenv("QB_CLIENT_SECRET")
 REDIRECT_URI = os.getenv("REDIRECT_URI")
-ENVIRONMENT = os.getenv("QB_ENVIRONMENT")
+ENVIRONMENT = os.getenv("QB_ENVIRONMENT", "production")
 REALM_ID = os.getenv("QB_REALM")
 
 try:
