@@ -20,7 +20,11 @@ REDIRECT_URI = os.getenv("REDIRECT_URI")
 ENVIRONMENT = os.getenv("QB_ENVIRONMENT")
 REALM_ID = os.getenv("QB_REALM")
 
-auth_client = AuthClient(CLIENT_ID, CLIENT_SECRET, ENVIRONMENT, REDIRECT_URI)
+try:
+    auth_client = AuthClient(CLIENT_ID, CLIENT_SECRET, ENVIRONMENT, REDIRECT_URI)
+except Exception as e:
+    print("Error initializing AuthClient:", e)
+    raise
 
 @app.route("/")
 def home():
