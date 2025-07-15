@@ -9,6 +9,7 @@ from io import BytesIO
 from dotenv import load_dotenv
 from transform_pnl_data import transform_qb_to_df
 from email_utils import send_forecast_email
+from quickbooks.reports.profit_and_loss import ProfitAndLoss
 
 load_dotenv()
 app = Flask(__name__)
