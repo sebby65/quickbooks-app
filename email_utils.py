@@ -1,26 +1,24 @@
-# email_utils.py
-
 import os
 import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
-from email.mime.application import MIMEApplication
+from email.message import EmailMessage
+from io import StringIO
 
-EMAIL_USER = os.environ.get("EMAIL_USER")
-EMAIL_PASS = os.environ.get("EMAIL_PASS")
+def send_forecast_email(to_email, df):
+    try:
+        msg = EmailMessage()
+        msg["Subject"] = "Your Financial Forecast Report"
+        msg["From"] = os.getenv("EMAIL_USER")
+        msg["To"] = to_email
+        msg.set_content("Please find the attached forecast report.")
 
-def send_email_report(to_email, csv_data, subject="Your Clariqor Forecast Report"):
-    msg = MIMEMultipart()
-    msg["From"] = EMAIL_USER
-    msg["To"] = to_email
-    msg["Subject"] = subject
+        csv_buffer = StringIO()
+        df.to_csv(csv_buffer, index=False)
+        msg.add_attachment(csv_buffer.getvalue(), filename="forecast.csv", subtype="csv", maintype="text")
 
-    msg.attach(MIMEText("Attached is your latest financial forecast from Clariqor.", "plain"))
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
+            smtp.login(os.getenv("EMAIL_USER"), os.getenv("EMAIL_PASS"))
+            smtp.send_message(msg)
 
-    attachment = MIMEApplication(csv_data, Name="forecast.csv")
-    attachment["Content-Disposition"] = 'attachment; filename="forecast.csv"'
-    msg.attach(attachment)
-
-    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
-        smtp.login(EMAIL_USER, EMAIL_PASS)
-        smtp.send_message(msg)
+        return "Email sent successfully."
+    except Exception as e:
+        return f"Email failed: {str(e)}"
