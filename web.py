@@ -1,94 +1,85 @@
 import os
-from flask import Flask, render_template, redirect, request, session, send_file
-from dotenv import load_dotenv
-from fetch_qb_data import fetch_qb_data
-from transform_pnl_data import transform_data
-from email_utils import send_email_with_attachment
-from auth import AuthClient
+from flask import Flask, render_template, request, redirect, send_file
+from intuitlib.client import AuthClient
+from intuitlib.enums import Scopes
+from quickbooks import QuickBooks
+from quickbooks.objects.report import ProfitAndLoss
 import pandas as pd
 from prophet import Prophet
-from io import StringIO
-from datetime import datetime
+from io import BytesIO
+from dotenv import load_dotenv
+from transform_pnl_data import transform_qb_to_df
+from email_utils import send_forecast_email
 
 load_dotenv()
 app = Flask(__name__)
-app.secret_key = os.environ.get("FLASK_SECRET_KEY", "devkey")
+app.secret_key = os.getenv("FLASK_SECRET_KEY")
 
-auth_client = AuthClient()
+CLIENT_ID = os.getenv("QB_CLIENT_ID")
+CLIENT_SECRET = os.getenv("QB_CLIENT_SECRET")
+REDIRECT_URI = os.getenv("REDIRECT_URI")
+ENVIRONMENT = os.getenv("QB_ENVIRONMENT")
+REALM_ID = os.getenv("QB_REALM")
+
+auth_client = AuthClient(CLIENT_ID, CLIENT_SECRET, ENVIRONMENT, REDIRECT_URI)
 
 @app.route("/")
-def index():
-    forecast_data = session.pop("forecast_data", None)
-    email_status = session.pop("email_status", None)
-    return render_template("index.html", chart_data=forecast_data, email_status=email_status)
+def home():
+    return render_template("index.html")
 
 @app.route("/connect")
 def connect():
-    return redirect(auth_client.get_auth_url())
+    auth_url = auth_client.get_authorization_url([Scopes.ACCOUNTING])
+    return redirect(auth_url)
 
 @app.route("/callback")
 def callback():
     auth_client.get_bearer_token(request.args.get('code'))
-    session["realm_id"] = request.args.get("realmId")
     return redirect("/")
 
 @app.route("/forecast", methods=["POST"])
 def forecast():
     months = int(request.args.get("range", 12))
-    realm_id = session.get("realm_id")
-    if not realm_id:
-        return redirect("/connect")
+    client = QuickBooks(
+        auth_client=auth_client,
+        refresh_token=auth_client.refresh_token,
+        company_id=REALM_ID,
+    )
+    pnl = ProfitAndLoss()
+    pnl_data = pnl.get(client)
+    df = transform_qb_to_df(pnl_data)
+    df = df.sort_values("ds").tail(months)
 
-    raw_data = fetch_qb_data(auth_client, realm_id)
-    df = transform_data(raw_data)
-
-    df = df.sort_values("ds").tail(months)  # ✅ FIXED COLUMN NAME
     model = Prophet()
     model.fit(df.rename(columns={"ds": "ds", "y": "y"}))
-    future = model.make_future_dataframe(periods=3, freq="M")
+    future = model.make_future_dataframe(periods=months, freq="M")
     forecast = model.predict(future)
 
     merged = pd.merge(df, forecast[["ds", "yhat"]], on="ds", how="left")
-    merged = merged.rename(columns={"yhat": "forecast"})
-    forecast_dict = merged[["ds", "y", "forecast"]].to_dict(orient="records")
+    merged.rename(columns={"yhat": "forecast"}, inplace=True)
+    app.config["forecast_df"] = merged
 
-    session["forecast_data"] = forecast_dict
-    session["csv_data"] = merged[["ds", "forecast"]].to_csv(index=False)
-    return redirect("/")
+    chart_data = merged.to_dict("records")
+    return render_template("index.html", chart_data=chart_data)
 
 @app.route("/download")
-def download_csv():
-    csv = session.get("csv_data")
-    if not csv:
-        return "No data available", 400
-
-    buf = StringIO(csv)
-    return send_file(
-        buf,
-        mimetype="text/csv",
-        as_attachment=True,
-        download_name="forecast.csv"
-    )
+def download():
+    df = app.config.get("forecast_df")
+    if df is None:
+        return "No forecast to download", 400
+    output = BytesIO()
+    df.to_csv(output, index=False)
+    output.seek(0)
+    return send_file(output, mimetype="text/csv", as_attachment=True, download_name="forecast.csv")
 
 @app.route("/email", methods=["POST"])
 def email():
-    recipient = request.form.get("email")
-    csv = session.get("csv_data")
-
-    if not recipient or not csv:
-        return "Missing email or data", 400
-
-    buf = StringIO(csv)
-    send_email_with_attachment(
-        recipient_email=recipient,
-        subject="Your Clariqor Forecast Report",
-        body="Attached is your latest financial forecast from Clariqor.",
-        attachment_bytes=buf.getvalue().encode(),
-        filename="forecast.csv"
-    )
-
-    session["email_status"] = "📧 Forecast sent successfully!"
-    return redirect("/")
+    df = app.config.get("forecast_df")
+    if df is None:
+        return "No forecast to email", 400
+    to_email = request.form.get("email", os.getenv("EMAIL_RECEIVER"))
+    status = send_forecast_email(to_email, df)
+    return render_template("index.html", email_status=status)
 
 if __name__ == "__main__":
     app.run(debug=True)
