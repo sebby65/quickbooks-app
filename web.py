@@ -37,7 +37,7 @@ except Exception as e:
 
 @app.route("/")
 def home():
-    return render_template("financial_dashboard (2).html")
+    return render_template("financial_dashboard.html")
 
 @app.route("/connect")
 def connect():
