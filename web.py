@@ -5,7 +5,7 @@ from flask import Flask, request, jsonify, send_file
 from prophet import Prophet
 import plotly.graph_objects as go
 from dotenv import load_dotenv
-from datetime import datetime  # <-- FIXED (was missing before)
+from datetime import datetime
 
 load_dotenv()
 
@@ -19,14 +19,13 @@ REALM_ID = os.getenv("QB_REALM_ID")
 
 TOKEN_URL = "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer"
 
-# --- Helper: Save updated tokens to .env automatically ---
+# --- Helper: Save updated tokens to .env ---
 def save_to_env(key, value):
     env_file = ".env"
     lines = []
     if os.path.exists(env_file):
         with open(env_file, "r") as f:
             lines = f.readlines()
-
     updated = False
     with open(env_file, "w") as f:
         for line in lines:
@@ -46,51 +45,49 @@ def get_access_token():
     data = {"grant_type": "refresh_token", "refresh_token": REFRESH_TOKEN}
     r = requests.post(TOKEN_URL, headers=headers, data=data, auth=auth)
     token_data = r.json()
-
     if "refresh_token" in token_data:
         REFRESH_TOKEN = token_data["refresh_token"]
         save_to_env("QB_REFRESH_TOKEN", REFRESH_TOKEN)
-
     return token_data.get("access_token")
 
-# --- Fetch Profit & Loss Report (YTD) ---
+# --- Fetch Profit & Loss Report (Year-to-Date) ---
 def fetch_pnl_report():
     year_start = f"{datetime.now().year}-01-01"
     today = datetime.now().strftime("%Y-%m-%d")
-
     access_token = get_access_token()
     url = f"https://quickbooks.api.intuit.com/v3/company/{REALM_ID}/reports/ProfitAndLoss"
     headers = {"Authorization": f"Bearer {access_token}", "Accept": "application/json"}
     params = {"start_date": year_start, "end_date": today}
-
     r = requests.get(url, headers=headers, params=params)
     report = r.json()
-
     if not report.get("Rows") or not report["Rows"].get("Row"):
         return None
     return report
 
-# --- Convert JSON report to DataFrame (Revenue, Expenses, Net Income) ---
+# --- Convert QuickBooks JSON into DataFrame ---
 def report_to_df(report):
-    rows = report["Rows"]["Row"]
+    def parse_rows(rows, totals):
+        for row in rows:
+            # Recursively parse subcategories (like Advertising → Website Ads)
+            if "Rows" in row:
+                parse_rows(row["Rows"]["Row"], totals)
+            elif "ColData" in row:
+                name = row["ColData"][0]["value"].lower()
+                value = float(row["ColData"][1]["value"].replace(",", "")) if len(row["ColData"]) > 1 else 0.0
+                if "gross profit" in name or "income" in name:
+                    totals["Revenue"] += value
+                elif "expense" in name:
+                    totals["Expenses"] += value
+                elif "net operating income" in name or "net income" in name:
+                    totals["NetIncome"] = value
+
     totals = {"Revenue": 0.0, "Expenses": 0.0, "NetIncome": 0.0}
-
-    for row in rows:
-        if "ColData" in row:
-            name = row["ColData"][0]["value"].lower()
-            value = float(row["ColData"][1]["value"].replace(",", "")) if len(row["ColData"]) > 1 else 0.0
-
-            if "gross profit" in name or "income" in name:
-                totals["Revenue"] += value
-            elif "expense" in name:
-                totals["Expenses"] += value
-            elif "net operating income" in name or "net income" in name:
-                totals["NetIncome"] = value
-
+    parse_rows(report["Rows"]["Row"], totals)
     if totals["NetIncome"] == 0.0:
         totals["NetIncome"] = totals["Revenue"] - totals["Expenses"]
 
-    months = pd.date_range(f"{datetime.now().year}-01-01", periods=6, freq="M")
+    # Use 'ME' (Month End) to avoid warnings
+    months = pd.date_range(f"{datetime.now().year}-01-01", periods=6, freq="ME")
     df = pd.DataFrame({
         "Month": months,
         "Revenue": [totals["Revenue"] / 6] * 6,
@@ -99,7 +96,7 @@ def report_to_df(report):
     })
     return df
 
-# --- Forecast Revenue, Expenses, Net Income ---
+# --- Forecast Metrics ---
 def forecast_metrics(df):
     forecasts = {}
     for col in ["Revenue", "Expenses", "NetIncome"]:
@@ -111,20 +108,17 @@ def forecast_metrics(df):
         forecasts[col] = forecast[["ds", "yhat"]]
     return forecasts
 
-# --- Create interactive chart with actuals + forecast ---
+# --- Create Chart ---
 def create_chart(df, forecasts):
     fig = go.Figure()
-
     for col in ["Revenue", "Expenses", "NetIncome"]:
         fig.add_trace(go.Scatter(x=df["Month"], y=df[col], mode="lines+markers", name=f"Actual {col}"))
         future_part = forecasts[col][forecasts[col]["ds"] > df["Month"].max()]
         fig.add_trace(go.Scatter(x=future_part["ds"], y=future_part["yhat"], mode="lines+markers", name=f"Forecasted {col}"))
-
     fig.update_layout(title="QuickBooks P&L Forecast", xaxis_title="Month", yaxis_title="USD")
     fig.write_html("forecast.html", auto_open=False)
 
 # --- ROUTES ---
-
 @app.route("/")
 def index():
     return """
@@ -140,7 +134,6 @@ def auth_route():
     redirect_uri = "https://quickbooks-app-3.onrender.com/callback"
     scope = "com.intuit.quickbooks.accounting"
     state = "secureRandomState"
-
     auth_url = (
         f"{base_url}?client_id={CLIENT_ID}"
         f"&response_type=code&scope={scope}"
@@ -153,22 +146,17 @@ def callback():
     global REFRESH_TOKEN, REALM_ID
     code = request.args.get("code")
     realm_id = request.args.get("realmId")
-
     if not code:
         return "No authorization code received.", 400
-
     auth = (CLIENT_ID, CLIENT_SECRET)
     headers = {"Accept": "application/json", "Content-Type": "application/x-www-form-urlencoded"}
     data = {"grant_type": "authorization_code", "code": code, "redirect_uri": "https://quickbooks-app-3.onrender.com/callback"}
-
     r = requests.post(TOKEN_URL, headers=headers, data=data, auth=auth)
     tokens = r.json()
-
     REFRESH_TOKEN = tokens.get("refresh_token")
     REALM_ID = realm_id
     save_to_env("QB_REFRESH_TOKEN", REFRESH_TOKEN)
     save_to_env("QB_REALM_ID", REALM_ID)
-
     return "<h2>QuickBooks Connected!</h2><p>Tokens saved. You can now use /pnl and /forecast.</p>"
 
 @app.route("/pnl")
@@ -184,14 +172,11 @@ def forecast_route():
     report = fetch_pnl_report()
     if not report:
         return "<h2>No P&L data found. Seed QuickBooks with invoices and expenses.</h2>"
-
     df = report_to_df(report)
     forecasts = forecast_metrics(df)
     create_chart(df, forecasts)
-
     last_row = df.iloc[-1]
     avg_net = forecasts["NetIncome"]["yhat"].tail(3).mean()
-
     return f"""
     <h2>Financial Forecast Summary</h2>
     <p><b>Last Month (June):</b><br>
