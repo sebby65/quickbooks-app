@@ -31,6 +31,7 @@ def get_access_token():
     data = {"grant_type": "refresh_token", "refresh_token": REFRESH_TOKEN}
 
     response = requests.post(url, headers=headers, data=data, auth=auth)
+    print("DEBUG Raw QuickBooks P&L Response:", response.text)
     if response.status_code != 200:
         print("QuickBooks token error:", response.text)
         return None
