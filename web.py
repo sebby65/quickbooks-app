@@ -54,11 +54,15 @@ def get_access_token():
     return token_data.get("access_token")
 
 # ---- Step 2: Fetch Profit & Loss Report ----
-def fetch_pnl_report(start_date="2024-01-01", end_date="2024-06-30"):
+def fetch_pnl_report():
+    # Get current year start to today's date
+    year_start = f"{datetime.now().year}-01-01"
+    today = datetime.now().strftime("%Y-%m-%d")
+
     access_token = get_access_token()
     url = f"https://quickbooks.api.intuit.com/v3/company/{REALM_ID}/reports/ProfitAndLoss"
     headers = {"Authorization": f"Bearer {access_token}", "Accept": "application/json"}
-    params = {"start_date": start_date, "end_date": end_date}
+    params = {"start_date": year_start, "end_date": today}
 
     r = requests.get(url, headers=headers, params=params)
     report = r.json()
@@ -66,6 +70,36 @@ def fetch_pnl_report(start_date="2024-01-01", end_date="2024-06-30"):
     if not report.get("Rows") or not report["Rows"].get("Row"):
         return None
     return report
+
+def report_to_df(report):
+    rows = report["Rows"]["Row"]
+    data = {"Revenue": 0.0, "Expenses": 0.0, "NetIncome": 0.0}
+
+    for row in rows:
+        if "ColData" in row:
+            name = row["ColData"][0]["value"].lower()
+            value = float(row["ColData"][1]["value"].replace(",", "")) if len(row["ColData"]) > 1 else 0.0
+
+            if "gross profit" in name or "income" in name:
+                data["Revenue"] += value
+            elif "expense" in name:
+                data["Expenses"] += value
+            elif "net operating income" in name or "net income" in name:
+                data["NetIncome"] = value
+
+    # If QuickBooks doesn't give NetIncome, calculate it
+    if data["NetIncome"] == 0.0:
+        data["NetIncome"] = data["Revenue"] - data["Expenses"]
+
+    # Build DataFrame (6 months of repeated totals for Prophet)
+    months = pd.date_range(f"{datetime.now().year}-01-01", periods=6, freq="M")
+    df = pd.DataFrame({
+        "Month": months,
+        "Revenue": [data["Revenue"] / 6] * 6,
+        "Expenses": [data["Expenses"] / 6] * 6,
+        "NetIncome": [data["NetIncome"] / 6] * 6,
+    })
+    return df
 
 # ---- Step 3: Convert JSON to a usable DataFrame ----
 def report_to_df(report):
