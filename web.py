@@ -1,165 +1,107 @@
 import os
-import requests
-import pandas as pd
-import matplotlib.pyplot as plt
-from io import BytesIO
-from flask import Flask, send_file, render_template_string, redirect, request
-from prophet import Prophet
+import json
 from datetime import datetime
+import pandas as pd
+import plotly.graph_objects as go
+import requests
+from flask import Flask, redirect, render_template_string, request
+from prophet import Prophet
 
-app = Flask(__name__)
-
-# Environment variables
-CLIENT_ID = os.getenv("QB_CLIENT_ID")
-CLIENT_SECRET = os.getenv("QB_CLIENT_SECRET")
-REFRESH_TOKEN = os.getenv("QB_REFRESH_TOKEN")
-REALM_ID = os.getenv("QB_REALM_ID")
+# Load environment variables
+QB_CLIENT_ID = os.environ.get("QB_CLIENT_ID")
+QB_CLIENT_SECRET = os.environ.get("QB_CLIENT_SECRET")
+QB_REFRESH_TOKEN = os.environ.get("QB_REFRESH_TOKEN")
+QB_REALM_ID = os.environ.get("QB_REALM_ID")
+QB_ENVIRONMENT = os.environ.get("QB_ENVIRONMENT", "production")
+REDIRECT_URI = os.environ.get("REDIRECT_URI")
 BASE_URL = "https://quickbooks.api.intuit.com/v3/company"
-TOKEN_URL = "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer"
-REDIRECT_URI = os.getenv("REDIRECT_URI", "https://quickbooks-app-3.onrender.com/callback")
-
-# ------------------ AUTH ------------------
 
 def get_access_token():
-    """Exchange refresh token for access token."""
-    if not REFRESH_TOKEN:
-        print("DEBUG: No refresh token found.")
-        return None
-
+    url = "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer"
+    auth = (QB_CLIENT_ID, QB_CLIENT_SECRET)
     headers = {"Accept": "application/json", "Content-Type": "application/x-www-form-urlencoded"}
-    data = {
-        "grant_type": "refresh_token",
-        "refresh_token": REFRESH_TOKEN
-    }
-    auth = (CLIENT_ID, CLIENT_SECRET)
-
-    response = requests.post(TOKEN_URL, headers=headers, data=data, auth=auth)
-    print("DEBUG Token Response:", response.text)
-
-    if response.status_code != 200:
-        print("QuickBooks token error:", response.text)
-        return None
-
-    return response.json().get("access_token")
-
-# ------------------ DATA ------------------
+    data = {"grant_type": "refresh_token", "refresh_token": QB_REFRESH_TOKEN}
+    response = requests.post(url, headers=headers, data=data, auth=auth)
+    if response.status_code == 200:
+        token_data = response.json()
+        return token_data["access_token"]
+    print("DEBUG Token Error:", response.text)
+    return None
 
 def fetch_pnl_report():
-    """Fetch Profit & Loss report from QuickBooks and debug response."""
     token = get_access_token()
     if not token:
-        print("DEBUG: No access token")
         return []
-
     start_date = f"{datetime.now().year}-01-01"
     end_date = datetime.now().strftime("%Y-%m-%d")
-    url = f"{BASE_URL}/{REALM_ID}/reports/ProfitAndLoss?start_date={start_date}&end_date={end_date}&minorversion=65"
-
+    url = f"{BASE_URL}/{QB_REALM_ID}/reports/ProfitAndLoss?start_date={start_date}&end_date={end_date}"
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
     response = requests.get(url, headers=headers)
-
-    # Debug log full QuickBooks API response
-    print("DEBUG Raw QuickBooks P&L Response:", response.text)
-
     if response.status_code != 200:
         print("QuickBooks fetch failed:", response.text)
         return []
+    data = response.json()
+    income = float(data["Rows"]["Row"][0]["Rows"]["Row"][0]["ColData"][1]["value"])
+    expenses = float(data["Rows"]["Row"][2]["Summary"]["ColData"][1]["value"])
+    net_income = float(data["Rows"]["Row"][4]["Summary"]["ColData"][1]["value"])
+    return [{"Month": datetime.now().strftime("%b %Y"), "Revenue": income, "Expenses": expenses, "NetIncome": net_income}]
 
-    try:
-        data = response.json()
-    except Exception as e:
-        print("DEBUG: Failed to parse JSON:", e)
-        return []
-
-    rows = data.get("Rows", {}).get("Row", [])
-    if not rows:
-        print("DEBUG: No rows found in P&L report.")
-        # Fallback dummy data so app still functions
-        return [
-            {"Month": "Jan 2025", "Revenue": 90000, "Expenses": 30000, "NetIncome": 60000},
-            {"Month": "Feb 2025", "Revenue": 105000, "Expenses": 35000, "NetIncome": 70000}
-        ]
-
-    # TODO: Parse `rows` properly when QuickBooks sends real P&L data
-    return [
-        {"Month": "Jan 2025", "Revenue": 120000, "Expenses": 40000, "NetIncome": 80000},
-        {"Month": "Feb 2025", "Revenue": 110000, "Expenses": 35000, "NetIncome": 75000}
-    ]
-
-# ------------------ FORECAST ------------------
-
-def forecast_net_income(data):
-    """Forecast Net Income for next 6 months."""
+def build_forecast(data):
     df = pd.DataFrame(data)
-    df["Month"] = pd.to_datetime(df["Month"])
-    df = df.sort_values("Month")
-    df.rename(columns={"Month": "ds", "NetIncome": "y"}, inplace=True)
-
+    df["Month"] = pd.to_datetime(df["Month"], errors="coerce")
+    prophet_df = pd.DataFrame({"ds": df["Month"], "y": df["NetIncome"]})
     model = Prophet()
-    model.fit(df)
-    future = model.make_future_dataframe(periods=6, freq="MS")
+    model.fit(prophet_df)
+    future = model.make_future_dataframe(periods=3, freq="M")
     forecast = model.predict(future)
+    return forecast[["ds", "yhat"]].tail(3).to_dict(orient="records")
 
-    forecast_tail = forecast[["ds", "yhat"]].tail(6)
-    return forecast_tail
+def build_chart(data, forecast):
+    df_actual = pd.DataFrame(data)
+    df_actual["Month"] = pd.to_datetime(df_actual["Month"], errors="coerce")
+    df_forecast = pd.DataFrame(forecast)
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=df_actual["Month"], y=df_actual["NetIncome"], mode="lines+markers", name="Actual Net Income"))
+    fig.add_trace(go.Scatter(x=df_forecast["ds"], y=df_forecast["yhat"], mode="lines+markers", name="Forecast Net Income"))
+    fig.update_layout(title="QuickBooks P&L Forecast", xaxis_title="Month", yaxis_title="USD", template="plotly_white")
+    return fig.to_html(full_html=False)
 
-def plot_forecast(forecast_df):
-    """Generate forecast plot."""
-    plt.figure(figsize=(8, 5))
-    plt.plot(forecast_df["ds"], forecast_df["yhat"], marker="o")
-    plt.title("Net Income Forecast")
-    plt.xlabel("Month")
-    plt.ylabel("Projected Net Income")
-    plt.grid(True)
-    img = BytesIO()
-    plt.savefig(img, format="png")
-    img.seek(0)
-    return img
-
-# ------------------ ROUTES ------------------
+app = Flask(__name__)
 
 @app.route("/")
-def home():
-    return "Clariqor QuickBooks App — P&L and Forecast"
+def index():
+    return "QuickBooks App Running!"
 
-@app.route("/auth")
-def auth_route():
-    """Start QuickBooks OAuth flow."""
-    return redirect(
-        f"https://appcenter.intuit.com/connect/oauth2?"
-        f"client_id={CLIENT_ID}&response_type=code&scope=com.intuit.quickbooks.accounting"
+@app.route("/connect")
+def connect():
+    auth_url = (
+        "https://appcenter.intuit.com/connect/oauth2"
+        f"?client_id={QB_CLIENT_ID}&response_type=code&scope=com.intuit.quickbooks.accounting"
         f"&redirect_uri={REDIRECT_URI}&state=secureRandomState"
     )
+    return redirect(auth_url)
 
 @app.route("/callback")
-def callback_route():
-    """Handle QuickBooks OAuth callback."""
-    code = request.args.get("code")
-    realm_id = request.args.get("realmId")
-    return f"Authorization complete. Code: {code}, Realm ID: {realm_id}"
+def callback():
+    return "QuickBooks connected successfully!"
 
 @app.route("/pnl")
-def pnl_route():
-    report = fetch_pnl_report()
-    return {"data": report} if report else {"data": []}
+def pnl():
+    data = fetch_pnl_report()
+    return json.dumps({"data": data})
 
 @app.route("/forecast")
-def forecast_route():
+def forecast():
     data = fetch_pnl_report()
-    if not data:
-        return {"error": "No P&L data available"}
-    forecast_df = forecast_net_income(data)
-    forecast_summary = forecast_df.to_dict(orient="records")
-    return {"forecast": forecast_summary}
-
-@app.route("/forecast_chart")
-def forecast_chart_route():
-    data = fetch_pnl_report()
-    if not data:
-        return {"error": "No P&L data available"}
-    forecast_df = forecast_net_income(data)
-    img = plot_forecast(forecast_df)
-    return send_file(img, mimetype="image/png")
+    forecast_data = build_forecast(data)
+    chart_html = build_chart(data, forecast_data)
+    avg_net_income = sum(item["yhat"] for item in forecast_data) / len(forecast_data)
+    html = f"""
+    <h1>Financial Forecast Summary</h1>
+    <p><b>Average Net Income (Next 3 Months):</b> ${avg_net_income:,.2f}</p>
+    {chart_html}
+    """
+    return render_template_string(html)
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
+    app.run(host="0.0.0.0", port=5000)
