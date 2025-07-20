@@ -13,7 +13,32 @@ REALM_ID = os.getenv("QB_REALM_ID")
 TOKEN_URL = "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer"
 BASE_URL = "https://sandbox-quickbooks.api.intuit.com/v3/company"
 
+# Detect if running on Render (no .env writes allowed)
+ON_RENDER = os.getenv("RENDER", "false").lower() == "true"
+
+def save_refresh_token(token):
+    """Only save refresh token locally (not on Render)."""
+    if ON_RENDER:
+        return  # Skip writing to disk on Render
+    lines = []
+    if os.path.exists(".env"):
+        with open(".env", "r") as f:
+            lines = f.readlines()
+
+    updated = False
+    for i, line in enumerate(lines):
+        if line.startswith("QB_REFRESH_TOKEN="):
+            lines[i] = f"QB_REFRESH_TOKEN={token}\n"
+            updated = True
+
+    if not updated:
+        lines.append(f"QB_REFRESH_TOKEN={token}\n")
+
+    with open(".env", "w") as f:
+        f.writelines(lines)
+
 def get_access_token():
+    """Refresh QuickBooks access token."""
     global REFRESH_TOKEN
     auth_header = (CLIENT_ID + ":" + CLIENT_SECRET).encode("utf-8")
     headers = {
@@ -30,9 +55,11 @@ def get_access_token():
 
     data = response.json()
     REFRESH_TOKEN = data.get("refresh_token", REFRESH_TOKEN)
+    save_refresh_token(REFRESH_TOKEN)
     return data["access_token"]
 
 def fetch_pnl_report():
+    """Fetch Profit & Loss report from QuickBooks."""
     token = get_access_token()
     if not token:
         return []
@@ -47,8 +74,11 @@ def fetch_pnl_report():
         print("QuickBooks fetch failed:", response.text)
         return []
 
-    # Mock parse logic — replace with actual field extraction
-    return [{"Month": "Jan 2025", "Revenue": 90000, "Expenses": 30000, "NetIncome": 60000}]
+    # Replace with real JSON parsing
+    return [
+        {"Month": "Jan 2025", "Revenue": 90000, "Expenses": 30000, "NetIncome": 60000},
+        {"Month": "Feb 2025", "Revenue": 105000, "Expenses": 35000, "NetIncome": 70000}
+    ]
 
 @app.route("/")
 def home():
@@ -61,7 +91,6 @@ def pnl_route():
 
 @app.route("/forecast")
 def forecast_route():
-    # Forecast logic placeholder
     return "Forecast page (to be implemented)."
 
 if __name__ == "__main__":
