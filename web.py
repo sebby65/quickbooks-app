@@ -1,130 +1,155 @@
 import os
-import json
-from datetime import datetime
 import requests
+from flask import Flask, jsonify, redirect, render_template_string, request
+from datetime import datetime
 import pandas as pd
-from flask import Flask, redirect, request, jsonify, render_template_string
 from prophet import Prophet
 import matplotlib.pyplot as plt
-from io import BytesIO
-import base64
+import io, base64
 
+# Flask app
 app = Flask(__name__)
+CLIENT_ID = os.getenv("QB_CLIENT_ID")
+CLIENT_SECRET = os.getenv("QB_CLIENT_SECRET")
+REALM_ID = os.getenv("QB_REALM_ID")
+REFRESH_TOKEN = os.getenv("QB_REFRESH_TOKEN")
+BASE_URL = f"https://quickbooks.api.intuit.com/v3/company/{REALM_ID}"
+REDIRECT_URI = os.getenv("REDIRECT_URI")
+ENVIRONMENT = os.getenv("QB_ENVIRONMENT", "production")
 
-# Load environment variables
-BASE_URL = "https://quickbooks.api.intuit.com/v3/company"
-CLIENT_ID = os.environ.get("QB_CLIENT_ID")
-CLIENT_SECRET = os.environ.get("QB_CLIENT_SECRET")
-REALM_ID = os.environ.get("QB_REALM_ID")
-REFRESH_TOKEN = os.environ.get("QB_REFRESH_TOKEN")
-REDIRECT_URI = os.environ.get("REDIRECT_URI")
-ENVIRONMENT = os.environ.get("QB_ENVIRONMENT", "production")
+token_cache = {"access_token": None, "expires_at": None}
 
-# Access token cache
-ACCESS_TOKEN = None
-
+# === OAuth: Fetch Access Token ===
 def get_access_token():
-    global ACCESS_TOKEN
-    if ACCESS_TOKEN:
-        return ACCESS_TOKEN
+    global token_cache
+    if token_cache["access_token"] and datetime.utcnow() < token_cache["expires_at"]:
+        return token_cache["access_token"]
 
-    token_url = "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer"
-    auth_header = base64.b64encode(f"{CLIENT_ID}:{CLIENT_SECRET}".encode()).decode()
-    headers = {
-        "Authorization": f"Basic {auth_header}",
-        "Content-Type": "application/x-www-form-urlencoded"
-    }
+    url = "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer"
+    auth = (CLIENT_ID, CLIENT_SECRET)
+    headers = {"Accept": "application/json", "Content-Type": "application/x-www-form-urlencoded"}
     data = {"grant_type": "refresh_token", "refresh_token": REFRESH_TOKEN}
-    response = requests.post(token_url, headers=headers, data=data)
-    if response.status_code == 200:
-        token_data = response.json()
-        ACCESS_TOKEN = token_data["access_token"]
-        return ACCESS_TOKEN
-    return None
+    resp = requests.post(url, headers=headers, auth=auth, data=data)
+    if resp.status_code != 200:
+        print("Token Refresh Failed:", resp.text)
+        return None
 
-def fetch_pnl_report():
-    """Fetch Profit & Loss report and backfill months with zeros for Prophet."""
+    tokens = resp.json()
+    token_cache["access_token"] = tokens["access_token"]
+    token_cache["expires_at"] = datetime.utcnow() + pd.Timedelta(seconds=tokens["expires_in"] - 60)
+    return token_cache["access_token"]
+
+# === Helper: Fetch QuickBooks Data ===
+def qb_query(query):
     token = get_access_token()
-    if not token:
-        return []
-    start_date = f"{datetime.now().year}-01-01"
-    end_date = datetime.now().strftime("%Y-%m-%d")
-    url = f"{BASE_URL}/{REALM_ID}/reports/ProfitAndLoss?start_date={start_date}&end_date={end_date}"
+    if not token: return []
+    url = f"{BASE_URL}/query?query={query}&minorversion=65"
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
-    response = requests.get(url, headers=headers)
-    if response.status_code != 200:
+    resp = requests.get(url, headers=headers)
+    if resp.status_code != 200:
+        print("QB Query Failed:", resp.text)
+        return []
+    return resp.json().get("QueryResponse", {})
+
+def aggregate_monthly_data():
+    """Fetch Revenue & Expenses per month from Invoices and Purchases"""
+    try:
+        invoices = qb_query("SELECT * FROM Invoice")
+        purchases = qb_query("SELECT * FROM Purchase")
+
+        revenue_by_month, expense_by_month = {}, {}
+        date_format = "%Y-%m-%d"
+
+        # Aggregate Revenue
+        for inv in invoices.get("Invoice", []):
+            date = datetime.strptime(inv["TxnDate"], date_format)
+            month = date.strftime("%b %Y")
+            amt = float(inv.get("TotalAmt", 0))
+            revenue_by_month[month] = revenue_by_month.get(month, 0) + amt
+
+        # Aggregate Expenses
+        for pur in purchases.get("Purchase", []):
+            date = datetime.strptime(pur["TxnDate"], date_format)
+            month = date.strftime("%b %Y")
+            amt = float(pur.get("TotalAmt", 0))
+            expense_by_month[month] = expense_by_month.get(month, 0) + amt
+
+        # Merge
+        all_months = sorted(set(revenue_by_month.keys()) | set(expense_by_month.keys()))
+        results = []
+        for m in all_months:
+            rev = revenue_by_month.get(m, 0)
+            exp = expense_by_month.get(m, 0)
+            results.append({"Month": m, "Revenue": rev, "Expenses": exp, "NetIncome": rev - exp})
+
+        return results
+
+    except Exception as e:
+        print("Transaction fetch failed, falling back to P&L:", e)
+        return fallback_pnl_summary()
+
+def fallback_pnl_summary():
+    """Fallback: Use Profit & Loss API if invoice/purchase query fails"""
+    token = get_access_token()
+    if not token: return []
+    today = datetime.now().strftime("%Y-%m-%d")
+    url = f"{BASE_URL}/reports/ProfitAndLoss?start_date={datetime.now().year}-01-01&end_date={today}"
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    resp = requests.get(url, headers=headers)
+    if resp.status_code != 200:
+        print("Fallback P&L failed:", resp.text)
         return []
 
-    raw = response.json()
+    raw = resp.json()
+    income = float(next((r['ColData'][1]['value'] for r in raw.get("Rows", {}).get("Row", []) if r.get("group") == "Income"), 0))
+    expenses = float(next((r['ColData'][1]['value'] for r in raw.get("Rows", {}).get("Row", []) if r.get("group") == "Expenses"), 0))
+    net = income - expenses
+    month = datetime.now().strftime("%b %Y")
 
-    def extract_total(group_name):
-        for r in raw.get("Rows", {}).get("Row", []):
-            if r.get("group") == group_name:
-                coldata = r.get("Summary", {}).get("ColData") or r.get("Header", {}).get("ColData")
-                if coldata and len(coldata) > 1:
-                    try:
-                        return float(coldata[1].get("value", 0) or 0)
-                    except ValueError:
-                        return 0.0
-        return 0.0
+    return [{"Month": month, "Revenue": income, "Expenses": expenses, "NetIncome": net}]
 
-    income = extract_total("Income")
-    expenses = extract_total("Expenses")
-    net_income = extract_total("NetIncome")
+# === Forecasting ===
+def build_forecast(data):
+    df = pd.DataFrame(data)
+    df["Month"] = pd.to_datetime(df["Month"], format="%b %Y", errors="coerce")
+    df.sort_values("Month", inplace=True)
 
-    # Backfill all months for this year so Prophet can work
-    months = pd.date_range(start=f"{datetime.now().year}-01-01", end=datetime.now(), freq="MS")
-    pnl_data = []
-    for m in months:
-        # Only fill current month with the actual values, others stay 0
-        pnl_data.append({
-            "Month": m.strftime("%b %Y"),
-            "Revenue": income if m.month == datetime.now().month else 0,
-            "Expenses": expenses if m.month == datetime.now().month else 0,
-            "NetIncome": net_income if m.month == datetime.now().month else 0
-        })
-    return pnl_data
+    # Backfill missing months
+    all_months = pd.date_range(df["Month"].min(), df["Month"].max(), freq="MS")
+    df = df.set_index("Month").reindex(all_months).fillna(0).rename_axis("Month").reset_index()
 
-def build_forecast(pnl_data):
-    """Run Prophet forecast on Net Income."""
-    df = pd.DataFrame(pnl_data)
-    df["Month"] = pd.to_datetime(df["Month"])
-    df = df.sort_values("Month")
-
-    prophet_df = df.rename(columns={"Month": "ds", "NetIncome": "y"})[["ds", "y"]]
-    model = Prophet(yearly_seasonality=False, daily_seasonality=False)
+    prophet_df = df.rename(columns={"Month": "ds", "NetIncome": "y"})
+    model = Prophet()
     model.fit(prophet_df)
     future = model.make_future_dataframe(periods=3, freq="MS")
     forecast = model.predict(future)
 
-    # Plot
+    # Chart
     plt.figure(figsize=(8, 5))
     plt.plot(df["Month"], df["NetIncome"], label="Actual Net Income", marker="o")
     plt.plot(forecast["ds"], forecast["yhat"], label="Forecast", linestyle="--", marker="x")
-    plt.title("Net Income Forecast")
     plt.xlabel("Month")
     plt.ylabel("Net Income ($)")
+    plt.title("Net Income Forecast")
     plt.legend()
-    plt.grid(True)
+    plt.tight_layout()
 
-    img = BytesIO()
-    plt.savefig(img, format="png", bbox_inches="tight")
-    img.seek(0)
-    plt.close()
-    return forecast, base64.b64encode(img.getvalue()).decode()
+    buf = io.BytesIO()
+    plt.savefig(buf, format="png")
+    buf.seek(0)
+    chart_base64 = base64.b64encode(buf.read()).decode("utf-8")
 
+    avg_next_3 = forecast.tail(3)["yhat"].mean()
+    return chart_base64, avg_next_3
+
+# === Routes ===
 @app.route("/")
-def index():
-    return "QuickBooks App Running!"
+def home():
+    return "QuickBooks Connected!"
 
 @app.route("/connect")
 def connect():
-    auth_url = (
-        f"https://appcenter.intuit.com/connect/oauth2?"
-        f"client_id={CLIENT_ID}&response_type=code&scope=com.intuit.quickbooks.accounting"
-        f"&redirect_uri={REDIRECT_URI}&state=secureRandomState"
-    )
-    return redirect(auth_url)
+    return redirect(f"https://appcenter.intuit.com/connect/oauth2?client_id={CLIENT_ID}&response_type=code&scope=com.intuit.quickbooks.accounting&redirect_uri={REDIRECT_URI}&state=secureRandomState")
 
 @app.route("/callback")
 def callback():
@@ -132,26 +157,22 @@ def callback():
 
 @app.route("/pnl")
 def pnl():
-    return jsonify({"data": fetch_pnl_report()})
+    return jsonify({"data": aggregate_monthly_data()})
 
 @app.route("/forecast")
 def forecast():
-    pnl_data = fetch_pnl_report()
-    if not pnl_data:
-        return "No P&L data available", 500
-    forecast_df, chart = build_forecast(pnl_data)
-    avg_net_income = forecast_df.tail(3)["yhat"].mean()
+    data = aggregate_monthly_data()
+    if not data: return "No financial data available."
+    chart, avg_income = build_forecast(data)
 
     html = f"""
-    <html>
-    <body>
-        <h1 style="font-family: Arial, sans-serif;">Financial Forecast Summary</h1>
-        <h2 style="font-family: Arial, sans-serif;">Average Net Income (Next 3 Months): ${avg_net_income:,.2f}</h2>
-        <img src="data:image/png;base64,{chart}" alt="Forecast Chart" style="max-width:100%; height:auto;">
-    </body>
-    </html>
+    <h1 style="font-family: Arial; font-size: 28px;">Financial Forecast Summary</h1>
+    <h2 style="font-family: Arial; font-size: 18px;">
+        Average Net Income (Next 3 Months): ${avg_income:,.2f}
+    </h2>
+    <img src="data:image/png;base64,{chart}" style="max-width: 90%; height: auto;">
     """
-    return html
+    return render_template_string(html)
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+    app.run(host="0.0.0.0", port=10000)
