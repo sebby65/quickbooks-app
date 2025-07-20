@@ -1,132 +1,129 @@
 import os
 import io
-import json
 import base64
+from datetime import datetime
+import requests
 import pandas as pd
 import matplotlib.pyplot as plt
-from datetime import datetime
-from flask import Flask, jsonify, send_file, render_template
-from prophet import Prophet
+from flask import Flask, jsonify, send_file, render_template_string
 from fpdf import FPDF
+from prophet import Prophet
+from dotenv import load_dotenv
 
-from fetch_qb_data import get_access_token, fetch_profit_and_loss
-from email_utils import send_email
+# Load environment variables
+load_dotenv()
+
+CLIENT_ID = os.getenv("QB_CLIENT_ID")
+CLIENT_SECRET = os.getenv("QB_CLIENT_SECRET")
+REALM_ID = os.getenv("REALM_ID")
+REFRESH_TOKEN = os.getenv("REFRESH_TOKEN")
+BASE_URL = "https://quickbooks.api.intuit.com/v3/company"
+TOKEN_URL = "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer"
 
 app = Flask(__name__)
 
-# Branding
-CLARIQOR_LOGO = "https://via.placeholder.com/150x50?text=Clariqor"  # Placeholder logo
-REPORT_TITLE = "Clariqor Financial Forecast"
+# -----------------------
+# TOKEN + DATA HELPERS
+# -----------------------
 
-# ----------------------------
-# DATA FETCH + PROCESSING
-# ----------------------------
-def get_pnl_data():
+def get_access_token():
+    auth = base64.b64encode(f"{CLIENT_ID}:{CLIENT_SECRET}".encode()).decode()
+    headers = {
+        "Authorization": f"Basic {auth}",
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Accept": "application/json",
+    }
+    data = {
+        "grant_type": "refresh_token",
+        "refresh_token": REFRESH_TOKEN,
+    }
+    try:
+        response = requests.post(TOKEN_URL, headers=headers, data=data)
+        response.raise_for_status()
+        return response.json().get("access_token")
+    except Exception:
+        return None
+
+def fetch_qb_pnl():
+    """Fetch Profit & Loss data from QuickBooks, or return [] if not available."""
     token = get_access_token()
-    if not token:
-        return pd.DataFrame()
+    if not token or not REALM_ID:
+        return []
 
-    raw = fetch_profit_and_loss(token)
-    # Parse QuickBooks report
-    income = float(next((r["Summary"]["ColData"][1]["value"] for r in raw["Rows"]["Row"] if r.get("group") == "Income"), 0))
-    expenses = float(next((r["Summary"]["ColData"][1]["value"] for r in raw["Rows"]["Row"] if r.get("group") == "Expenses"), 0))
-    net = income - expenses
+    today = datetime.today().strftime("%Y-%m-%d")
+    start = f"{datetime.today().year}-01-01"
+    url = f"{BASE_URL}/{REALM_ID}/reports/ProfitAndLoss?start_date={start}&end_date={today}"
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    try:
+        res = requests.get(url, headers=headers)
+        if res.status_code != 200:
+            return []
+        raw = res.json()
 
-    today = datetime.today()
-    df = pd.DataFrame([{
-        "Month": today.replace(day=1),
-        "Revenue": income,
-        "Expenses": expenses,
-        "NetIncome": net
-    }])
+        # Parse values from QuickBooks JSON (safely)
+        income = float(next((r["Summary"]["ColData"][1]["value"] for r in raw["Rows"]["Row"] if r.get("group") == "Income"), 0))
+        expenses = float(next((r["Summary"]["ColData"][1]["value"] for r in raw["Rows"]["Row"] if r.get("group") == "Expenses"), 0))
+        net = float(next((r["Summary"]["ColData"][1]["value"] for r in raw["Rows"]["Row"] if r.get("group") == "NetIncome"), 0))
 
-    # Backfill missing months
-    start_date = today.replace(month=1, day=1)
-    months = pd.date_range(start=start_date, end=today, freq="MS")
-    df = df.set_index("Month").reindex(months, fill_value=0).reset_index().rename(columns={"index": "Month"})
-    return df
+        month_label = datetime.today().strftime("%b %Y")
+        return [{"Month": month_label, "Revenue": round(income, 2), "Expenses": round(expenses, 2), "NetIncome": round(net, 2)}]
+    except Exception:
+        return []
 
-# ----------------------------
-# FORECAST GENERATION
-# ----------------------------
-def generate_forecast(df):
-    prophet_df = df.rename(columns={"Month": "ds", "NetIncome": "y"})
+def get_pnl_data():
+    """Fetch real QuickBooks P&L, fallback to mock data if empty."""
+    data = fetch_qb_pnl()
+    if not data:
+        # Mock fallback data
+        data = [
+            {"Month": "Jan 2025", "Revenue": 90000, "Expenses": 30000, "NetIncome": 60000},
+            {"Month": "Feb 2025", "Revenue": 105000, "Expenses": 35000, "NetIncome": 70000},
+            {"Month": "Mar 2025", "Revenue": 95000, "Expenses": 40000, "NetIncome": 55000},
+        ]
+    return pd.DataFrame(data)
+
+# -----------------------
+# FORECAST + INSIGHTS
+# -----------------------
+
+def forecast_net_income(df):
+    df["Month"] = pd.to_datetime(df["Month"], errors="coerce")
+    df = df.dropna(subset=["Month"])  # avoid NaT
+    prophet_df = df.rename(columns={"Month": "ds", "NetIncome": "y"})[["ds", "y"]]
     model = Prophet()
     model.fit(prophet_df)
-    future = model.make_future_dataframe(periods=6, freq="MS")
+    future = model.make_future_dataframe(periods=3, freq="M")
     forecast = model.predict(future)
+    return forecast
 
-    # Build display frame
-    forecast_df = pd.DataFrame({
-        "Month": forecast["ds"],
-        "PredictedNetIncome": forecast["yhat"].round(2)
-    })
-    return forecast_df
+def generate_insight(df):
+    if len(df) < 2:
+        return "Insufficient data for trend analysis."
+    change = df["NetIncome"].iloc[-1] - df["NetIncome"].iloc[-2]
+    pct = (change / max(df["NetIncome"].iloc[-2], 1)) * 100
+    if change > 0:
+        return f"Net Income increased by {pct:.1f}% compared to last month."
+    elif change < 0:
+        return f"Net Income decreased by {abs(pct):.1f}% compared to last month."
+    else:
+        return "Net Income remained flat compared to last month."
 
-# ----------------------------
-# VISUALIZATION (Chart)
-# ----------------------------
-def build_chart(df, forecast_df):
-    plt.figure(figsize=(10, 5))
-    plt.plot(df["Month"], df["Revenue"], label="Revenue", marker="o")
-    plt.plot(df["Month"], df["Expenses"], label="Expenses", marker="o")
-    plt.plot(forecast_df["Month"], forecast_df["PredictedNetIncome"], label="Forecasted Net Income", linestyle="--")
-    plt.title("Monthly Financial Overview")
-    plt.xlabel("Month")
-    plt.ylabel("USD")
-    plt.legend()
-    plt.grid(True)
-    plt.tight_layout()
+def plot_chart(df):
+    fig, ax = plt.subplots(figsize=(8, 4))
+    ax.plot(df["Month"], df["NetIncome"], marker="o", label="Net Income")
+    ax.set_title("Net Income Over Time")
+    ax.set_xlabel("Month")
+    ax.set_ylabel("Net Income ($)")
+    ax.legend()
+    buf = io.BytesIO()
+    plt.savefig(buf, format="png")
+    plt.close(fig)
+    buf.seek(0)
+    return base64.b64encode(buf.read()).decode()
 
-    img = io.BytesIO()
-    plt.savefig(img, format="png")
-    img.seek(0)
-    plt.close()
-    return img
-
-# ----------------------------
-# PDF REPORT GENERATION
-# ----------------------------
-def build_pdf(df, forecast_df, chart_img):
-    pdf = FPDF()
-    pdf.add_page()
-    pdf.set_font("Arial", "B", 16)
-
-    # Title + Branding
-    pdf.cell(0, 10, REPORT_TITLE, ln=True, align="C")
-    pdf.image(CLARIQOR_LOGO, x=150, y=10, w=40)
-
-    # Summary Insights
-    revenue = df["Revenue"].sum()
-    expenses = df["Expenses"].sum()
-    net = revenue - expenses
-    growth = forecast_df["PredictedNetIncome"].iloc[-1] - df["NetIncome"].iloc[-1]
-
-    pdf.set_font("Arial", "", 12)
-    pdf.ln(20)
-    pdf.multi_cell(0, 8, f"Total Revenue: ${revenue:,.0f}\n"
-                         f"Total Expenses: ${expenses:,.0f}\n"
-                         f"Net Income: ${net:,.0f}\n"
-                         f"Projected Growth (6 months): ${growth:,.0f}")
-
-    # Chart
-    img_bytes = chart_img.read()
-    chart_path = "chart.png"
-    with open(chart_path, "wb") as f:
-        f.write(img_bytes)
-    pdf.image(chart_path, x=10, y=100, w=190)
-
-    # Save PDF
-    pdf_path = "Clariqor_Financial_Report.pdf"
-    pdf.output(pdf_path)
-    return pdf_path
-
-# ----------------------------
+# -----------------------
 # ROUTES
-# ----------------------------
-@app.route("/")
-def home():
-    return "Clariqor Financial Forecast App"
+# -----------------------
 
 @app.route("/pnl")
 def pnl():
@@ -134,30 +131,64 @@ def pnl():
     return jsonify(df.to_dict(orient="records"))
 
 @app.route("/forecast")
-def forecast():
+def forecast_route():
     df = get_pnl_data()
-    forecast_df = generate_forecast(df)
-    chart_img = build_chart(df, forecast_df)
-    pdf_path = build_pdf(df, forecast_df, chart_img)
-
-    # Email PDF (to email in .env)
-    recipient = os.getenv("EMAIL_USER")
-    send_email(recipient, "Your Clariqor Financial Forecast", "Attached is your forecast report.", pdf_path)
-
-    # Return HTML page with download
-    return f"""
+    forecast = forecast_net_income(df)
+    chart = plot_chart(df)
+    insight = generate_insight(df)
+    html = f"""
     <html>
-        <body style="font-family: Arial; text-align: center;">
-            <h1>Clariqor Forecast</h1>
-            <p>Your report has been generated and emailed to {recipient}.</p>
-            <a href="/download" style="font-size: 18px;">Download PDF Report</a>
-        </body>
+    <head><title>Forecast Report</title></head>
+    <body>
+        <h2>Profit & Loss Forecast</h2>
+        <p>{insight}</p>
+        <img src="data:image/png;base64,{chart}" />
+    </body>
     </html>
     """
+    return html
 
-@app.route("/download")
-def download_pdf():
-    return send_file("Clariqor_Financial_Report.pdf", as_attachment=True)
+@app.route("/report")
+def pdf_report():
+    df = get_pnl_data()
+    insight = generate_insight(df)
+
+    # Generate chart image
+    chart_b64 = plot_chart(df)
+    chart_data = base64.b64decode(chart_b64)
+    chart_path = "chart.png"
+    with open(chart_path, "wb") as f:
+        f.write(chart_data)
+
+    # Generate PDF
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Arial", "B", 16)
+    pdf.cell(0, 10, "Financial Summary Report", ln=True, align="C")
+    pdf.set_font("Arial", "", 12)
+    pdf.multi_cell(0, 10, f"Insight: {insight}")
+    pdf.ln(5)
+    pdf.image(chart_path, x=10, y=None, w=180)
+    pdf.ln(85)
+
+    # Table
+    pdf.set_font("Arial", "B", 12)
+    pdf.cell(40, 10, "Month", 1)
+    pdf.cell(50, 10, "Revenue ($)", 1)
+    pdf.cell(50, 10, "Expenses ($)", 1)
+    pdf.cell(50, 10, "Net Income ($)", 1)
+    pdf.ln()
+    pdf.set_font("Arial", "", 12)
+    for _, row in df.iterrows():
+        pdf.cell(40, 10, str(row["Month"]), 1)
+        pdf.cell(50, 10, f"{row['Revenue']:,.0f}", 1)
+        pdf.cell(50, 10, f"{row['Expenses']:,.0f}", 1)
+        pdf.cell(50, 10, f"{row['NetIncome']:,.0f}", 1)
+        pdf.ln()
+
+    output_path = "financial_report.pdf"
+    pdf.output(output_path)
+    return send_file(output_path, as_attachment=True)
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
