@@ -30,9 +30,9 @@ def get_access_token():
         print("QuickBooks token error:", resp.text)
         return None
     data = resp.json()
-    # IMPORTANT: QuickBooks issues a new refresh_token each time
     if "refresh_token" in data:
-        with open(".env", "a") as f:  # Replace your token persistently
+        # Persist new refresh token so it doesn't expire
+        with open(".env", "a") as f:
             f.write(f"\nQB_REFRESH_TOKEN={data['refresh_token']}")
     return data.get("access_token")
 
@@ -45,8 +45,7 @@ def fetch_pnl_report():
         print("QuickBooks fetch failed:", resp.text)
         return []
 
-    # Dummy parsing for testing (replace with actual parsing logic)
-    # Simulating 6 months of P&L data for now
+    # Placeholder: replace this with parsed QuickBooks JSON
     return [
         {"Month": "Jan 2025", "Revenue": 90000, "Expenses": 30000, "NetIncome": 60000},
         {"Month": "Feb 2025", "Revenue": 105000, "Expenses": 35000, "NetIncome": 70000},
@@ -65,6 +64,14 @@ def forecast_pnl(df):
     forecast = m.predict(future)
     return forecast
 
+@app.route("/")
+def home():
+    return render_template_string("""
+        <h1>QuickBooks Forecast App</h1>
+        <p><a href='/pnl'>View P&L JSON</a></p>
+        <p><a href='/forecast'>View Forecast</a></p>
+    """)
+
 @app.route("/pnl")
 def pnl_route():
     return json.dumps(fetch_pnl_report())
@@ -75,11 +82,7 @@ def forecast_route():
     if not df:
         return "No data available"
     forecast = forecast_pnl(df)
-
-    # For now, just show forecasted net income
     avg_future = round(forecast.tail(3)["yhat"].mean(), 2)
-
-    # Simple page (escape chart)
     return render_template_string("""
         <h1>Financial Forecast Summary</h1>
         <p>Last Month Net Income: ${{ last_net }}</p>
