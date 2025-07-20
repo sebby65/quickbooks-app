@@ -1,98 +1,146 @@
 import os
-from flask import Flask, render_template, request, redirect, send_file
-from intuitlib.client import AuthClient
-from intuitlib.enums import Scopes
-from quickbooks import QuickBooks
-from dotenv import load_dotenv
-from transform_pnl_data import transform_qb_to_df
-from email_utils import send_forecast_email
-from fetch_qb_data import fetch_qb_data
-import pandas as pd
-from prophet import Prophet
-from io import BytesIO
 import requests
+import pandas as pd
+from flask import Flask, request, jsonify, send_file
+from prophet import Prophet
+import plotly.graph_objects as go
+from dotenv import load_dotenv
 
 load_dotenv()
 
 app = Flask(__name__)
-app.secret_key = os.getenv("FLASK_SECRET_KEY")
 
+# QuickBooks credentials (fill CLIENT_SECRET in .env)
 CLIENT_ID = os.getenv("QB_CLIENT_ID")
 CLIENT_SECRET = os.getenv("QB_CLIENT_SECRET")
-REDIRECT_URI = os.getenv("REDIRECT_URI")
-ENVIRONMENT = os.getenv("QB_ENVIRONMENT", "sandbox")
-REALM_ID = os.getenv("QB_REALM")
+REFRESH_TOKEN = os.getenv("QB_REFRESH_TOKEN")  # Will update after first auth
+REALM_ID = os.getenv("QB_REALM_ID")           # Will capture on first auth
 
-try:
-    if ENVIRONMENT not in ['sandbox', 'production']:
-        raise ValueError("Invalid QB_ENVIRONMENT: must be 'sandbox' or 'production'")
-    auth_client = AuthClient(
-        client_id=CLIENT_ID,
-        client_secret=CLIENT_SECRET,
-        environment=ENVIRONMENT,
-        redirect_uri=REDIRECT_URI
-    )
-except Exception as e:
-    print("Error initializing AuthClient:", e)
-    raise SystemExit("AuthClient setup failed. Check QB_ENVIRONMENT and credentials.")
+TOKEN_URL = "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer"
 
-@app.route("/")
-def home():
-    return render_template("financial_dashboard.html")
+# Step 1: Exchange refresh token for a fresh access token
+def get_access_token():
+    auth = (CLIENT_ID, CLIENT_SECRET)
+    headers = {"Accept": "application/json", "Content-Type": "application/x-www-form-urlencoded"}
+    data = {"grant_type": "refresh_token", "refresh_token": REFRESH_TOKEN}
+    r = requests.post(TOKEN_URL, headers=headers, data=data, auth=auth)
+    token_data = r.json()
+    return token_data.get("access_token")
 
-@app.route("/connect")
-def connect():
-    auth_url = auth_client.get_authorization_url([Scopes.ACCOUNTING])
-    return redirect(auth_url)
-
-@app.route("/callback")
-def callback():
-    auth_client.get_bearer_token(request.args.get("code"))
-    return redirect("/")
-
-@app.route("/forecast", methods=["POST"])
-def get_pnl_report(realm_id, access_token):
-    url = f"https://quickbooks.api.intuit.com/v3/company/{realm_id}/reports/ProfitAndLoss"
-    headers = {
-        "Authorization": f"Bearer {access_token}",
-        "Accept": "application/json"
-    }
-    params = {
-        "start_date": "2024-01-01",
-        "end_date": "2024-06-30"
-    }
+# Step 2: Fetch Profit & Loss Report from QuickBooks
+def fetch_pnl_report(start_date="2024-01-01", end_date="2024-06-30"):
+    access_token = get_access_token()
+    url = f"https://quickbooks.api.intuit.com/v3/company/{REALM_ID}/reports/ProfitAndLoss"
+    headers = {"Authorization": f"Bearer {access_token}", "Accept": "application/json"}
+    params = {"start_date": start_date, "end_date": end_date}
 
     r = requests.get(url, headers=headers, params=params)
     report = r.json()
 
     if not report.get("Rows") or not report["Rows"].get("Row"):
-        print("❌ No Profit & Loss data. Add more transactions.")
         return None
-
-    print("✅ P&L data received!")
     return report
 
-# Test it
-pnl_report = get_pnl_report(realm_id, access_token)
+# Step 3: Convert QuickBooks JSON into DataFrame
+def report_to_df(report):
+    rows = report["Rows"]["Row"]
+    data = []
+    for row in rows:
+        if "ColData" in row:
+            name = row["ColData"][0]["value"]
+            value = float(row["ColData"][1]["value"].replace(",", "")) if len(row["ColData"]) > 1 else 0.0
+            data.append({"Account": name, "Amount": value})
+    return pd.DataFrame(data)
 
-@app.route("/download")
-def download():
-    df = app.config.get("forecast_df")
-    if df is None:
-        return "No forecast to download", 400
-    output = BytesIO()
-    df.to_csv(output, index=False)
-    output.seek(0)
-    return send_file(output, mimetype="text/csv", as_attachment=True, download_name="forecast.csv")
+# Step 4: Forecast Net Income
+def forecast_net_income(df):
+    df["NetIncome"] = df["Amount"]
+    df["Month"] = pd.date_range("2024-01-01", periods=len(df), freq="M")
 
-@app.route("/email", methods=["POST"])
-def email():
-    df = app.config.get("forecast_df")
-    if df is None:
-        return "No forecast to email", 400
-    to_email = request.form.get("email", os.getenv("EMAIL_RECEIVER"))
-    status = send_forecast_email(to_email, df)
-    return render_template("financial_dashboard (2).html", email_status=status)
+    forecast_df = pd.DataFrame({"ds": df["Month"], "y": df["NetIncome"]})
+    model = Prophet()
+    model.fit(forecast_df)
+
+    future = model.make_future_dataframe(periods=3, freq="M")
+    forecast = model.predict(future)
+    combined = pd.DataFrame({"Month": forecast["ds"], "PredictedNetIncome": forecast["yhat"]})
+    return combined
+
+# Step 5: Create Forecast Chart
+def create_chart(df, forecast_df):
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=df["Month"], y=df["Amount"], mode="lines+markers", name="Actual Net Income"))
+    future_part = forecast_df[forecast_df["Month"] > df["Month"].max()]
+    fig.add_trace(go.Scatter(x=future_part["Month"], y=future_part["PredictedNetIncome"], mode="lines+markers", name="Forecasted Net Income"))
+    fig.update_layout(title="QuickBooks P&L Forecast", xaxis_title="Month", yaxis_title="USD")
+    fig.write_html("forecast.html", auto_open=False)
+
+# ---- Routes ----
+
+# Root Dashboard
+@app.route("/")
+def index():
+    return """
+    <h1>Financial Forecast Dashboard</h1>
+    <p><a href="/auth">Authorize QuickBooks</a></p>
+    <p><a href="/pnl">View P&L JSON</a></p>
+    <p><a href="/forecast">Generate Forecast Chart</a></p>
+    """
+
+# OAuth Redirect Handler — captures code and realmId, exchanges for tokens
+@app.route("/callback")
+def callback():
+    global REFRESH_TOKEN, REALM_ID
+    code = request.args.get("code")
+    realm_id = request.args.get("realmId")
+
+    if not code:
+        return "No authorization code received.", 400
+
+    # Exchange code for tokens
+    auth = (CLIENT_ID, CLIENT_SECRET)
+    headers = {"Accept": "application/json", "Content-Type": "application/x-www-form-urlencoded"}
+    data = {
+        "grant_type": "authorization_code",
+        "code": code,
+        "redirect_uri": "https://quickbooks-app-3.onrender.com/callback"
+    }
+
+    r = requests.post(TOKEN_URL, headers=headers, data=data, auth=auth)
+    tokens = r.json()
+
+    REFRESH_TOKEN = tokens.get("refresh_token")
+    access_token = tokens.get("access_token")
+    REALM_ID = realm_id
+
+    return f"""
+    <h2>QuickBooks Connection Successful!</h2>
+    <p><b>Realm ID:</b> {REALM_ID}</p>
+    <p><b>Refresh Token:</b> {REFRESH_TOKEN}</p>
+    <p><b>Access Token (temporary):</b> {access_token}</p>
+    <p>Save the Realm ID and Refresh Token into your .env file.</p>
+    <p><a href="/">Back to Dashboard</a></p>
+    """
+
+# Profit & Loss JSON
+@app.route("/pnl")
+def pnl_route():
+    report = fetch_pnl_report()
+    if not report:
+        return jsonify({"error": "No Profit & Loss data found. Seed invoices/expenses first."})
+    df = report_to_df(report)
+    return jsonify(df.to_dict(orient="records"))
+
+# Forecast Chart
+@app.route("/forecast")
+def forecast_route():
+    report = fetch_pnl_report()
+    if not report:
+        return jsonify({"error": "No Profit & Loss data found."})
+    df = report_to_df(report)
+    forecast_df = forecast_net_income(df)
+    create_chart(df, forecast_df)
+    return send_file("forecast.html")
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(host="0.0.0.0", port=5000)
