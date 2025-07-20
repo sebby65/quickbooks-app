@@ -3,13 +3,13 @@ import pandas as pd
 import numpy as np
 from prophet import Prophet
 import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
 from io import BytesIO
 import base64
+from datetime import datetime
 
 app = Flask(__name__)
 
-# --- Mock P&L data (replace with QuickBooks API in production) ---
+# Mock P&L data (replace with actual QuickBooks API pull later)
 def fetch_pnl_report():
     data = [
         {"Month": "2025-01-01", "Revenue": 0, "Expenses": 0, "NetIncome": 0},
@@ -22,64 +22,82 @@ def fetch_pnl_report():
     ]
     return pd.DataFrame(data)
 
-# --- Prophet Forecasting Function ---
-def make_forecast(df):
-    prophet_df = df[["Month", "NetIncome"]].rename(columns={"Month": "ds", "NetIncome": "y"})
-    m = Prophet(daily_seasonality=False, yearly_seasonality=False)
-    m.fit(prophet_df)
+# Build forecast and visualizations
+def build_forecast(df):
+    df["Month"] = pd.to_datetime(df["Month"])
+    prophet_df = df.rename(columns={"Month": "ds", "NetIncome": "y"})[["ds", "y"]]
 
-    future = m.make_future_dataframe(periods=3, freq="ME")  # Avoid 'M' deprecation
-    forecast = m.predict(future)
-    forecast = forecast[["ds", "yhat"]]
+    # Prophet model
+    model = Prophet()
+    model.fit(prophet_df)
+    future = model.make_future_dataframe(periods=3, freq="ME")  # Month-end to avoid warnings
+    forecast = model.predict(future)
 
-    merged = pd.merge(df, forecast, left_on="Month", right_on="ds", how="outer")
-    merged = merged.drop(columns=["ds"]).rename(columns={"yhat": "Forecast"})
+    # Merge forecasts into main df
+    df_full = pd.merge(df, forecast[["ds", "yhat"]], left_on="Month", right_on="ds", how="outer")
+    df_full.drop(columns=["ds"], inplace=True)
+    df_full.rename(columns={"yhat": "Forecast"}, inplace=True)
 
-    # Fill future NaN revenue/expenses with 0 for cleaner table display
-    merged["Revenue"] = merged["Revenue"].fillna(0)
-    merged["Expenses"] = merged["Expenses"].fillna(0)
+    # Add a simple smoothed trend (rolling mean)
+    df_full["Smoothed"] = df_full["NetIncome"].rolling(window=3, min_periods=1).mean()
 
-    # Simple smoothed trend (rolling average on NetIncome)
-    merged["Smoothed"] = merged["NetIncome"].rolling(window=3, min_periods=1).mean().fillna(0)
+    # Remove rows that are fully empty (no actual or forecast)
+    df_full = df_full.dropna(subset=["Forecast"], how="all")
 
-    return merged, forecast
+    # Build plot
+    plt.figure(figsize=(10, 5))
+    plt.plot(df["Month"], df["NetIncome"], "bo-", label="Actual Net Income")
+    plt.plot(forecast["ds"], forecast["yhat"], "kx--", label="Forecast")
+    plt.plot(df_full["Month"], df_full["Smoothed"], "g:", label="Smoothed Trend")
 
-# --- Generate Chart ---
-def generate_chart(df, avg_net_income):
-    fig, ax = plt.subplots(figsize=(10, 5))
+    # Peak annotation
+    peak = df["NetIncome"].max()
+    if peak > 0:
+        peak_date = df.loc[df["NetIncome"].idxmax(), "Month"]
+        plt.annotate(f"Peak: ${peak:,.0f}", xy=(peak_date, peak), xytext=(peak_date, peak + 50000),
+                     arrowprops=dict(facecolor='black', shrink=0.05))
 
-    ax.plot(df["Month"], df["NetIncome"], "bo-", label="Actual Net Income")
-    ax.plot(df["Month"], df["Forecast"], "x--", color="orange", label="Forecast")
-    ax.plot(df["Month"], df["Smoothed"], "g:", label="Smoothed Trend")
+    plt.title("Financial Forecast Summary", fontsize=16, fontweight="bold")
+    plt.xlabel("Month")
+    plt.ylabel("Net Income ($)")
+    plt.legend()
+    plt.grid(True)
 
-    # Annotate peak
-    peak_row = df.loc[df["NetIncome"].idxmax()]
-    ax.annotate(f"Peak: ${peak_row['NetIncome']:,}", xy=(peak_row["Month"], peak_row["NetIncome"]),
-                xytext=(0, 30), textcoords="offset points", ha="center", fontsize=9,
-                arrowprops=dict(arrowstyle="->", color="black"))
-
-    # Axis & labels
-    ax.set_title("Financial Forecast Summary", fontsize=16, weight="bold")
-    ax.set_xlabel("Month")
-    ax.set_ylabel("Net Income ($)")
-    ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
-    ax.legend()
-    plt.xticks(rotation=30)
-
-    # Convert to base64
-    buf = BytesIO()
+    # Convert to image
+    img = BytesIO()
     plt.tight_layout()
-    plt.savefig(buf, format="png")
-    buf.seek(0)
-    chart_base64 = base64.b64encode(buf.read()).decode("utf-8")
-    plt.close(fig)
+    plt.savefig(img, format="png")
+    img.seek(0)
+    plot_url = base64.b64encode(img.getvalue()).decode()
 
-    return chart_base64
+    # Compute average forecasted net income
+    avg_forecast = forecast["yhat"].tail(3).mean()
+    negative_trend = avg_forecast < 0
 
-# --- Flask Routes ---
+    # Render HTML
+    warning_text = f"⚠️ Projected negative trend with average Net Income of ${avg_forecast:,.2f}." if negative_trend else ""
+    warning_color = "red" if negative_trend else "black"
+
+    table_html = df_full.to_html(classes="table", index=False, float_format=lambda x: f"${x:,.0f}")
+
+    html = f"""
+    <h1>Financial Forecast Summary</h1>
+    <h3 style="color:{warning_color};">{warning_text}</h3>
+    <img src="data:image/png;base64,{plot_url}" style="max-width:100%;"/>
+    <h2>Monthly Profit & Loss</h2>
+    {table_html}
+    """
+
+    return html
+
+# Routes
 @app.route("/")
 def home():
-    return "<h2>Welcome to Clariqor Financial Forecast</h2><p>Visit /pnl or /forecast to view reports.</p>"
+    return "Clariqor Financial Forecast App is running!"
+
+@app.route("/connect")
+def connect():
+    return "QuickBooks OAuth connection would go here. (Placeholder route so it doesn’t 404.)"
 
 @app.route("/pnl")
 def pnl():
@@ -89,26 +107,7 @@ def pnl():
 @app.route("/forecast")
 def forecast():
     df = fetch_pnl_report()
-    df["Month"] = pd.to_datetime(df["Month"])
-    df, forecast_df = make_forecast(df)
-    avg_net_income = forecast_df["yhat"][-3:].mean()
-
-    chart_base64 = generate_chart(df, avg_net_income)
-
-    # Build HTML output
-    warning_html = ""
-    if avg_net_income < 0:
-        warning_html = f"<p style='color:red; font-weight:bold;'>⚠ Projected negative trend with average Net Income of ${avg_net_income:,.2f}.</p>"
-
-    table_html = df.to_html(index=False, float_format=lambda x: f"${x:,.0f}")
-
-    html = f"""
-    <h1>Financial Forecast Summary</h1>
-    {warning_html}
-    <img src="data:image/png;base64,{chart_base64}" alt="Forecast Chart"/>
-    <h2>Monthly Profit & Loss</h2>
-    {table_html}
-    """
+    html = build_forecast(df)
     return render_template_string(html)
 
 if __name__ == "__main__":
