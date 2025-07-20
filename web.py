@@ -1,114 +1,163 @@
-from flask import Flask, jsonify, render_template_string
-import pandas as pd
-from prophet import Prophet
-import matplotlib.pyplot as plt
+import os
 import io
+import json
 import base64
-import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from datetime import datetime
+from flask import Flask, jsonify, send_file, render_template
+from prophet import Prophet
+from fpdf import FPDF
+
+from fetch_qb_data import get_access_token, fetch_profit_and_loss
+from email_utils import send_email
 
 app = Flask(__name__)
 
-# Mock P&L data (replace later with live QuickBooks data)
-pnl_data = [
-    {"Month": "2025-01-01", "Revenue": 0, "Expenses": 0, "NetIncome": 0},
-    {"Month": "2025-02-01", "Revenue": 40000, "Expenses": 0, "NetIncome": 40000},
-    {"Month": "2025-03-01", "Revenue": 500000, "Expenses": 100000, "NetIncome": 400000},
-    {"Month": "2025-04-01", "Revenue": 1002, "Expenses": 0, "NetIncome": 1002},
-    {"Month": "2025-05-01", "Revenue": 800, "Expenses": 10000, "NetIncome": -9200},
-    {"Month": "2025-06-01", "Revenue": 1000, "Expenses": 20000, "NetIncome": -19000},
-    {"Month": "2025-07-01", "Revenue": 200, "Expenses": 0, "NetIncome": 200}
-]
+# Branding
+CLARIQOR_LOGO = "https://via.placeholder.com/150x50?text=Clariqor"  # Placeholder logo
+REPORT_TITLE = "Clariqor Financial Forecast"
 
+# ----------------------------
+# DATA FETCH + PROCESSING
+# ----------------------------
+def get_pnl_data():
+    token = get_access_token()
+    if not token:
+        return pd.DataFrame()
+
+    raw = fetch_profit_and_loss(token)
+    # Parse QuickBooks report
+    income = float(next((r["Summary"]["ColData"][1]["value"] for r in raw["Rows"]["Row"] if r.get("group") == "Income"), 0))
+    expenses = float(next((r["Summary"]["ColData"][1]["value"] for r in raw["Rows"]["Row"] if r.get("group") == "Expenses"), 0))
+    net = income - expenses
+
+    today = datetime.today()
+    df = pd.DataFrame([{
+        "Month": today.replace(day=1),
+        "Revenue": income,
+        "Expenses": expenses,
+        "NetIncome": net
+    }])
+
+    # Backfill missing months
+    start_date = today.replace(month=1, day=1)
+    months = pd.date_range(start=start_date, end=today, freq="MS")
+    df = df.set_index("Month").reindex(months, fill_value=0).reset_index().rename(columns={"index": "Month"})
+    return df
+
+# ----------------------------
+# FORECAST GENERATION
+# ----------------------------
+def generate_forecast(df):
+    prophet_df = df.rename(columns={"Month": "ds", "NetIncome": "y"})
+    model = Prophet()
+    model.fit(prophet_df)
+    future = model.make_future_dataframe(periods=6, freq="MS")
+    forecast = model.predict(future)
+
+    # Build display frame
+    forecast_df = pd.DataFrame({
+        "Month": forecast["ds"],
+        "PredictedNetIncome": forecast["yhat"].round(2)
+    })
+    return forecast_df
+
+# ----------------------------
+# VISUALIZATION (Chart)
+# ----------------------------
+def build_chart(df, forecast_df):
+    plt.figure(figsize=(10, 5))
+    plt.plot(df["Month"], df["Revenue"], label="Revenue", marker="o")
+    plt.plot(df["Month"], df["Expenses"], label="Expenses", marker="o")
+    plt.plot(forecast_df["Month"], forecast_df["PredictedNetIncome"], label="Forecasted Net Income", linestyle="--")
+    plt.title("Monthly Financial Overview")
+    plt.xlabel("Month")
+    plt.ylabel("USD")
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+
+    img = io.BytesIO()
+    plt.savefig(img, format="png")
+    img.seek(0)
+    plt.close()
+    return img
+
+# ----------------------------
+# PDF REPORT GENERATION
+# ----------------------------
+def build_pdf(df, forecast_df, chart_img):
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Arial", "B", 16)
+
+    # Title + Branding
+    pdf.cell(0, 10, REPORT_TITLE, ln=True, align="C")
+    pdf.image(CLARIQOR_LOGO, x=150, y=10, w=40)
+
+    # Summary Insights
+    revenue = df["Revenue"].sum()
+    expenses = df["Expenses"].sum()
+    net = revenue - expenses
+    growth = forecast_df["PredictedNetIncome"].iloc[-1] - df["NetIncome"].iloc[-1]
+
+    pdf.set_font("Arial", "", 12)
+    pdf.ln(20)
+    pdf.multi_cell(0, 8, f"Total Revenue: ${revenue:,.0f}\n"
+                         f"Total Expenses: ${expenses:,.0f}\n"
+                         f"Net Income: ${net:,.0f}\n"
+                         f"Projected Growth (6 months): ${growth:,.0f}")
+
+    # Chart
+    img_bytes = chart_img.read()
+    chart_path = "chart.png"
+    with open(chart_path, "wb") as f:
+        f.write(img_bytes)
+    pdf.image(chart_path, x=10, y=100, w=190)
+
+    # Save PDF
+    pdf_path = "Clariqor_Financial_Report.pdf"
+    pdf.output(pdf_path)
+    return pdf_path
+
+# ----------------------------
+# ROUTES
+# ----------------------------
 @app.route("/")
 def home():
-    return "QuickBooks Forecast App Running. Visit /pnl or /forecast."
-
-@app.route("/connect")
-def connect():
-    return render_template_string("""
-        <h2>QuickBooks OAuth Connection</h2>
-        <p>Mock connection successful. (Live integration can be added later.)</p>
-    """)
+    return "Clariqor Financial Forecast App"
 
 @app.route("/pnl")
 def pnl():
-    return jsonify({"data": pnl_data})
+    df = get_pnl_data()
+    return jsonify(df.to_dict(orient="records"))
 
 @app.route("/forecast")
 def forecast():
-    df = pd.DataFrame(pnl_data)
+    df = get_pnl_data()
+    forecast_df = generate_forecast(df)
+    chart_img = build_chart(df, forecast_df)
+    pdf_path = build_pdf(df, forecast_df, chart_img)
 
-    # Ensure Month is datetime
-    df["Month"] = pd.to_datetime(df["Month"], errors='coerce')
-    df.sort_values("Month", inplace=True)
+    # Email PDF (to email in .env)
+    recipient = os.getenv("EMAIL_USER")
+    send_email(recipient, "Your Clariqor Financial Forecast", "Attached is your forecast report.", pdf_path)
 
-    # Forecast using Prophet
-    prophet_df = df.rename(columns={"Month": "ds", "NetIncome": "y"})
-    model = Prophet(yearly_seasonality=False, daily_seasonality=False)
-    model.fit(prophet_df)
-
-    # Forecast 3 future months
-    future = model.make_future_dataframe(periods=3, freq="MS")
-    forecast = model.predict(future)
-
-    # Merge forecast into display dataframe
-    forecast_data = forecast[["ds", "yhat"]].rename(columns={"ds": "Month", "yhat": "Forecast"})
-    display_df = pd.merge(df, forecast_data, on="Month", how="outer")
-
-    # Add a smoothed trendline (rolling average)
-    display_df["Smoothed"] = display_df["NetIncome"].rolling(window=3, min_periods=1).mean()
-
-    # Format Month safely for display
-    if not pd.api.types.is_datetime64_any_dtype(display_df["Month"]):
-        display_df["Month"] = pd.to_datetime(display_df["Month"], errors='coerce')
-    display_df["Month"] = display_df["Month"].dt.strftime("%b %Y")
-
-    # Build the plot
-    fig, ax = plt.subplots(figsize=(10, 5))
-    ax.plot(display_df["Month"], display_df["NetIncome"], label="Actual Net Income", marker="o", color="blue")
-    ax.plot(display_df["Month"], display_df["Forecast"], label="Forecast", linestyle="--", marker="x", color="black")
-    ax.plot(display_df["Month"], display_df["Smoothed"], label="Smoothed Trend", linestyle=":", color="green")
-
-    # Highlight peak Net Income
-    if not df.empty:
-        peak_idx = df["NetIncome"].idxmax()
-        if pd.notnull(peak_idx):
-            peak_month = df.loc[peak_idx, "Month"].strftime("%b %Y")
-            peak_value = df.loc[peak_idx, "NetIncome"]
-            ax.annotate(f"Peak: ${peak_value:,.0f}",
-                        xy=(peak_idx, peak_value), xycoords=("data", "data"),
-                        xytext=(0, 40), textcoords="offset points",
-                        ha="center", arrowprops=dict(arrowstyle="->", color="black"))
-
-    ax.set_title("Financial Forecast Summary", fontsize=14, fontweight="bold")
-    ax.set_xlabel("Month")
-    ax.set_ylabel("Net Income ($)")
-    ax.legend()
-    ax.grid(True)
-
-    # Save chart as base64
-    buf = io.BytesIO()
-    plt.tight_layout()
-    plt.savefig(buf, format="png")
-    buf.seek(0)
-    chart_base64 = base64.b64encode(buf.read()).decode("utf-8")
-    plt.close(fig)
-
-    # Warning if negative trend
-    avg_forecast = display_df["Forecast"].tail(3).mean()
-    warning = ""
-    if avg_forecast < 0:
-        warning = f"⚠️ Projected negative trend with average Net Income of ${avg_forecast:,.2f}."
-
-    # Render HTML
-    html = f"""
-    <h2>Financial Forecast Summary</h2>
-    <p style="color: red;">{warning}</p>
-    <img src="data:image/png;base64,{chart_base64}" alt="Forecast Chart" style="max-width: 100%;"><br>
-    <h3>Monthly Profit & Loss</h3>
-    {display_df.to_html(index=False, justify="center")}
+    # Return HTML page with download
+    return f"""
+    <html>
+        <body style="font-family: Arial; text-align: center;">
+            <h1>Clariqor Forecast</h1>
+            <p>Your report has been generated and emailed to {recipient}.</p>
+            <a href="/download" style="font-size: 18px;">Download PDF Report</a>
+        </body>
+    </html>
     """
-    return render_template_string(html)
+
+@app.route("/download")
+def download_pdf():
+    return send_file("Clariqor_Financial_Report.pdf", as_attachment=True)
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+    app.run(host="0.0.0.0", port=10000)
