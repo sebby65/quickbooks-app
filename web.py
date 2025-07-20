@@ -10,6 +10,7 @@ from fetch_qb_data import fetch_qb_data
 import pandas as pd
 from prophet import Prophet
 from io import BytesIO
+import requests
 
 load_dotenv()
 
@@ -50,31 +51,29 @@ def callback():
     return redirect("/")
 
 @app.route("/forecast", methods=["POST"])
-def forecast():
-    months = int(request.args.get("range", 12))
-    raw_data = fetch_qb_data(auth_client, REALM_ID)
-    df = transform_qb_to_df(raw_data)
+def get_pnl_report(realm_id, access_token):
+    url = f"https://quickbooks.api.intuit.com/v3/company/{realm_id}/reports/ProfitAndLoss"
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Accept": "application/json"
+    }
+    params = {
+        "start_date": "2024-01-01",
+        "end_date": "2024-06-30"
+    }
 
-    print("DataFrame Columns:", df.columns)
-    print("DataFrame Sample:\n", df.head())
+    r = requests.get(url, headers=headers, params=params)
+    report = r.json()
 
-    if "ds" not in df.columns or "y" not in df.columns:
-        return "Data transformation failed: Missing 'ds' or 'y' column.", 500
+    if not report.get("Rows") or not report["Rows"].get("Row"):
+        print("❌ No Profit & Loss data. Add more transactions.")
+        return None
 
-    df = df.sort_values("ds").tail(months)
+    print("✅ P&L data received!")
+    return report
 
-    model = Prophet()
-    model.fit(df.rename(columns={"ds": "ds", "y": "y"}))
-    future = model.make_future_dataframe(periods=months, freq="M")
-    forecast = model.predict(future)
-
-    merged = pd.merge(df, forecast[["ds", "yhat"]], on="ds", how="left")
-    merged.rename(columns={"yhat": "forecast"}, inplace=True)
-    app.config["forecast_df"] = merged
-
-    chart_data = merged.to_dict("records")
-    return render_template("financial_dashboard.html", chart_data=chart_data)
-
+# Test it
+pnl_report = get_pnl_report(realm_id, access_token)
 
 @app.route("/download")
 def download():
