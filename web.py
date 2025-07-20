@@ -9,7 +9,7 @@ app = Flask(__name__)
 CLIENT_ID = os.getenv("QB_CLIENT_ID")
 CLIENT_SECRET = os.getenv("QB_CLIENT_SECRET")
 REFRESH_TOKEN = os.getenv("QB_REFRESH_TOKEN")
-REALM_ID = os.getenv("QB_REALM_ID")
+REALM_ID = os.getenv("QB_REALM_ID")  # Make sure this is fixed in .env
 
 TOKEN_URL = "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer"
 BASE_URL = "https://sandbox-quickbooks.api.intuit.com/v3/company"
@@ -17,7 +17,6 @@ REDIRECT_URI = os.getenv("REDIRECT_URI", "https://quickbooks-app-3.onrender.com/
 ON_RENDER = os.getenv("RENDER", "false").lower() == "true"
 
 def save_refresh_token(token):
-    """Only save refresh token locally (not on Render)."""
     if ON_RENDER:
         return
     lines = []
@@ -35,7 +34,6 @@ def save_refresh_token(token):
         f.writelines(lines)
 
 def get_access_token():
-    """Refresh QuickBooks access token."""
     global REFRESH_TOKEN
     creds = f"{CLIENT_ID}:{CLIENT_SECRET}".encode("utf-8")
     headers = {
@@ -54,23 +52,37 @@ def get_access_token():
     return data["access_token"]
 
 def fetch_pnl_report():
-    """Fetch Profit & Loss report from QuickBooks."""
+    """Fetch Profit & Loss report and parse real QuickBooks data."""
     token = get_access_token()
     if not token:
-        return []
+        return [{"error": "Could not authenticate with QuickBooks"}]
+
     start_date = f"{datetime.now().year}-01-01"
     end_date = datetime.now().strftime("%Y-%m-%d")
     url = f"{BASE_URL}/{REALM_ID}/reports/ProfitAndLoss?start_date={start_date}&end_date={end_date}"
+
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
     response = requests.get(url, headers=headers)
+
     if response.status_code != 200:
         print("QuickBooks fetch failed:", response.text)
-        return []
-    # Replace with real JSON parsing
-    return [
-        {"Month": "Jan 2025", "Revenue": 90000, "Expenses": 30000, "NetIncome": 60000},
-        {"Month": "Feb 2025", "Revenue": 105000, "Expenses": 35000, "NetIncome": 70000}
-    ]
+        return [{"error": f"QuickBooks fetch failed: {response.status_code}"}]
+
+    data = response.json()
+    rows = data.get("Rows", {}).get("Row", [])
+    parsed = []
+
+    # Extract revenue, expenses, net income per month
+    for row in rows:
+        if row.get("type") == "Section":
+            for sub in row.get("Rows", {}).get("Row", []):
+                cells = sub.get("ColData", [])
+                if len(cells) >= 2:
+                    month = cells[0].get("value", "Unknown")
+                    amount = float(cells[1].get("value", "0"))
+                    parsed.append({"Month": month, "NetIncome": amount})
+
+    return parsed or [{"message": "No P&L data found"}]
 
 @app.route("/")
 def home():
@@ -78,7 +90,6 @@ def home():
 
 @app.route("/connect")
 def connect():
-    """Redirect to QuickBooks for OAuth login."""
     auth_url = (
         f"https://appcenter.intuit.com/connect/oauth2?"
         f"client_id={CLIENT_ID}&response_type=code&scope=com.intuit.quickbooks.accounting"
@@ -88,7 +99,6 @@ def connect():
 
 @app.route("/callback")
 def callback():
-    """Handle OAuth callback (exchange code for tokens)."""
     code = request.args.get("code")
     if not code:
         return "Missing code parameter!", 400
@@ -98,11 +108,7 @@ def callback():
         "Authorization": "Basic " + base64.b64encode(creds).decode("utf-8"),
         "Content-Type": "application/x-www-form-urlencoded"
     }
-    payload = {
-        "grant_type": "authorization_code",
-        "code": code,
-        "redirect_uri": REDIRECT_URI
-    }
+    payload = {"grant_type": "authorization_code", "code": code, "redirect_uri": REDIRECT_URI}
     response = requests.post(TOKEN_URL, headers=headers, data=payload)
     if response.status_code != 200:
         return f"OAuth exchange failed: {response.text}", 400
@@ -114,8 +120,7 @@ def callback():
 
 @app.route("/pnl")
 def pnl_route():
-    report = fetch_pnl_report()
-    return jsonify(report)
+    return jsonify(fetch_pnl_report())
 
 @app.route("/forecast")
 def forecast_route():
