@@ -11,7 +11,6 @@ load_dotenv()
 
 app = Flask(__name__)
 
-# QuickBooks credentials
 CLIENT_ID = os.getenv("QB_CLIENT_ID")
 CLIENT_SECRET = os.getenv("QB_CLIENT_SECRET")
 REFRESH_TOKEN = os.getenv("QB_REFRESH_TOKEN")
@@ -19,7 +18,7 @@ REALM_ID = os.getenv("QB_REALM_ID")
 
 TOKEN_URL = "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer"
 
-# --- Helper: Save updated tokens to .env ---
+
 def save_to_env(key, value):
     env_file = ".env"
     lines = []
@@ -37,7 +36,7 @@ def save_to_env(key, value):
         if not updated:
             f.write(f"{key}={value}\n")
 
-# --- Get a fresh Access Token using Refresh Token ---
+
 def get_access_token():
     global REFRESH_TOKEN
     auth = (CLIENT_ID, CLIENT_SECRET)
@@ -50,7 +49,7 @@ def get_access_token():
         save_to_env("QB_REFRESH_TOKEN", REFRESH_TOKEN)
     return token_data.get("access_token")
 
-# --- Fetch Profit & Loss Report (Year-to-Date) ---
+
 def fetch_pnl_report():
     year_start = f"{datetime.now().year}-01-01"
     today = datetime.now().strftime("%Y-%m-%d")
@@ -64,29 +63,35 @@ def fetch_pnl_report():
         return None
     return report
 
-# --- Convert QuickBooks JSON into DataFrame ---
+
 def report_to_df(report):
     def parse_rows(rows, totals):
         for row in rows:
-            # Recursively parse subcategories (like Advertising → Website Ads)
+            # Handle nested sections recursively
             if "Rows" in row:
                 parse_rows(row["Rows"]["Row"], totals)
             elif "ColData" in row:
                 name = row["ColData"][0]["value"].lower()
-                value = float(row["ColData"][1]["value"].replace(",", "")) if len(row["ColData"]) > 1 else 0.0
+                val = float(row["ColData"][1]["value"].replace(",", "")) if len(row["ColData"]) > 1 else 0.0
+
+                # Revenue/Gross Profit mapping
                 if "gross profit" in name or "income" in name:
-                    totals["Revenue"] += value
-                elif "expense" in name:
-                    totals["Expenses"] += value
-                elif "net operating income" in name or "net income" in name:
-                    totals["NetIncome"] = value
+                    totals["Revenue"] += val
+                # Expenses (including "Total for ..." categories)
+                elif "expense" in name or "total for" in name:
+                    totals["Expenses"] += val
+                # Net Income or Operating Income
+                if "net operating income" in name or "net income" in name:
+                    totals["NetIncome"] = val
 
     totals = {"Revenue": 0.0, "Expenses": 0.0, "NetIncome": 0.0}
     parse_rows(report["Rows"]["Row"], totals)
+
+    # Compute Net Income if missing
     if totals["NetIncome"] == 0.0:
         totals["NetIncome"] = totals["Revenue"] - totals["Expenses"]
 
-    # Use 'ME' (Month End) to avoid warnings
+    # Monthly breakdown (even split across 6 months for simplicity)
     months = pd.date_range(f"{datetime.now().year}-01-01", periods=6, freq="ME")
     df = pd.DataFrame({
         "Month": months,
@@ -96,7 +101,7 @@ def report_to_df(report):
     })
     return df
 
-# --- Forecast Metrics ---
+
 def forecast_metrics(df):
     forecasts = {}
     for col in ["Revenue", "Expenses", "NetIncome"]:
@@ -108,7 +113,7 @@ def forecast_metrics(df):
         forecasts[col] = forecast[["ds", "yhat"]]
     return forecasts
 
-# --- Create Chart ---
+
 def create_chart(df, forecasts):
     fig = go.Figure()
     for col in ["Revenue", "Expenses", "NetIncome"]:
@@ -118,7 +123,7 @@ def create_chart(df, forecasts):
     fig.update_layout(title="QuickBooks P&L Forecast", xaxis_title="Month", yaxis_title="USD")
     fig.write_html("forecast.html", auto_open=False)
 
-# --- ROUTES ---
+
 @app.route("/")
 def index():
     return """
@@ -127,6 +132,7 @@ def index():
     <p><a href="/pnl">View P&L JSON</a></p>
     <p><a href="/forecast">Generate Forecast Dashboard</a></p>
     """
+
 
 @app.route("/auth")
 def auth_route():
@@ -140,6 +146,7 @@ def auth_route():
         f"&redirect_uri={redirect_uri}&state={state}"
     )
     return f'<meta http-equiv="refresh" content="0; URL={auth_url}" />'
+
 
 @app.route("/callback")
 def callback():
@@ -159,6 +166,7 @@ def callback():
     save_to_env("QB_REALM_ID", REALM_ID)
     return "<h2>QuickBooks Connected!</h2><p>Tokens saved. You can now use /pnl and /forecast.</p>"
 
+
 @app.route("/pnl")
 def pnl_route():
     report = fetch_pnl_report()
@@ -166,6 +174,7 @@ def pnl_route():
         return jsonify({"error": "No Profit & Loss data found. Add invoices/expenses first."})
     df = report_to_df(report)
     return jsonify(df.to_dict(orient="records"))
+
 
 @app.route("/forecast")
 def forecast_route():
@@ -188,9 +197,11 @@ def forecast_route():
     <iframe src="/forecast_chart" width="100%" height="600"></iframe>
     """
 
+
 @app.route("/forecast_chart")
 def forecast_chart():
     return send_file("forecast.html")
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
