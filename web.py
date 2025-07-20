@@ -86,6 +86,22 @@ def index():
     <p><a href="/pnl">View P&L JSON</a></p>
     <p><a href="/forecast">Generate Forecast Chart</a></p>
     """
+@app.route("/auth")
+def auth_route():
+    # Build QuickBooks authorization URL
+    base_url = "https://appcenter.intuit.com/connect/oauth2"
+    redirect_uri = "https://quickbooks-app-3.onrender.com/callback"
+    scope = "com.intuit.quickbooks.accounting"
+    state = "secureRandomState"  # Can be anything, just for verification
+
+    auth_url = (
+        f"{base_url}?client_id={CLIENT_ID}"
+        f"&response_type=code&scope={scope}"
+        f"&redirect_uri={redirect_uri}&state={state}"
+    )
+
+    # Redirect user to QuickBooks login
+    return f'<meta http-equiv="refresh" content="0; URL={auth_url}" />'
 
 # OAuth Redirect Handler — captures code and realmId, exchanges for tokens
 @app.route("/callback")
