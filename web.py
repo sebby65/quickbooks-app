@@ -1,18 +1,14 @@
-import os
-import json
+from flask import Flask, jsonify, Response
 import pandas as pd
 import matplotlib.pyplot as plt
-from flask import Flask, jsonify, render_template_string
 from prophet import Prophet
-from datetime import datetime, timedelta
-from io import BytesIO
-import base64
+import io, base64
+from datetime import datetime
 
 app = Flask(__name__)
 
-# ---------------- Mock / Placeholder Data ----------------
-# (In production, fetch this from QuickBooks API dynamically)
-PERSISTENT_PNL = [
+# --- Mock data (replace with real QuickBooks API later) ---
+DATA = [
     {"Month": "Jan 2025", "Revenue": 0, "Expenses": 0, "NetIncome": 0},
     {"Month": "Feb 2025", "Revenue": 40000, "Expenses": 0, "NetIncome": 40000},
     {"Month": "Mar 2025", "Revenue": 500000, "Expenses": 100000, "NetIncome": 400000},
@@ -22,112 +18,99 @@ PERSISTENT_PNL = [
     {"Month": "Jul 2025", "Revenue": 200, "Expenses": 0, "NetIncome": 200},
 ]
 
-# ---------------- Utility Functions ----------------
-
-def build_forecast(data):
-    """Creates a 3-month Prophet forecast for Net Income."""
+# --- Helper: Convert list to DataFrame ---
+def to_df(data):
     df = pd.DataFrame(data)
-    df["Month"] = pd.to_datetime(df["Month"])
+    df["Month"] = pd.to_datetime(df["Month"], format="%b %Y")  # Fix format warning
     df = df.sort_values("Month")
+    return df
 
-    prophet_df = df.rename(columns={"Month": "ds", "NetIncome": "y"})
-    model = Prophet()
+# --- Forecast builder with Prophet ---
+def build_forecast(df):
+    prophet_df = df.rename(columns={"Month": "ds", "NetIncome": "y"})[["ds", "y"]]
+    model = Prophet(yearly_seasonality=False, weekly_seasonality=False, daily_seasonality=False)
     model.fit(prophet_df)
 
-    future = model.make_future_dataframe(periods=3, freq="M")
+    future = model.make_future_dataframe(periods=3, freq="ME")  # fix 'M' deprecation
     forecast = model.predict(future)
 
-    # Extract forecast data for the new months
-    future_forecast = forecast[["ds", "yhat"]].tail(3)
-    avg_net_income = future_forecast["yhat"].mean()
+    # Extract forecast portion (last 3 months)
+    forecast = forecast[["ds", "yhat"]].tail(3)
+    forecast.rename(columns={"ds": "Month", "yhat": "Forecast"}, inplace=True)
+    return forecast
 
-    return future_forecast.to_dict(orient="records"), avg_net_income
+# --- Generate insights based on forecast trend ---
+def generate_insights(df, forecast):
+    avg_next_3 = forecast["Forecast"].mean()
+    if avg_next_3 < 0:
+        note = f"⚠️ Warning: Projected negative trend with average Net Income of ${avg_next_3:,.2f}."
+    elif df["NetIncome"].max() > avg_next_3 * 5:
+        note = "Note: Forecast skewed by large income spikes; trend may not reflect typical performance."
+    else:
+        note = f"Average Net Income (Next 3 Months): ${avg_next_3:,.2f}"
+    return note, avg_next_3
 
+# --- Route: Profit & Loss raw data ---
+@app.route("/pnl", methods=["GET"])
+def pnl():
+    df = to_df(DATA)
+    return jsonify({"data": df.to_dict(orient="records")})
 
-def generate_chart(data, forecast):
-    """Generates a Matplotlib chart combining actual Net Income and forecast."""
-    df = pd.DataFrame(data)
-    df["Month"] = pd.to_datetime(df["Month"])
-    df = df.sort_values("Month")
+# --- Route: Forecast chart and insights ---
+@app.route("/forecast", methods=["GET"])
+def forecast():
+    df = to_df(DATA)
+    forecast = build_forecast(df)
 
-    forecast_df = pd.DataFrame(forecast)
-    forecast_df["ds"] = pd.to_datetime(forecast_df["ds"])
+    # Merge for combined table/chart data
+    combined = pd.merge(df, forecast, on="Month", how="outer").sort_values("Month")
+    combined["Forecast"] = combined["Forecast"].fillna(0)
 
+    # Insights & average
+    note, avg_next_3 = generate_insights(df, forecast)
+
+    # Chart setup
     plt.figure(figsize=(10, 5))
-    plt.plot(df["Month"], df["NetIncome"], label="Actual Net Income", marker="o")
-    plt.plot(forecast_df["ds"], forecast_df["yhat"], label="Forecast", linestyle="--", marker="x")
+    plt.plot(df["Month"], df["NetIncome"], marker="o", label="Actual Net Income", color="blue")
+    plt.plot(forecast["Month"], forecast["Forecast"], marker="x", linestyle="--", color="orange", label="Forecast")
+
+    # Moving average for smoother visual
+    df["Smoothed"] = df["NetIncome"].rolling(window=2, min_periods=1).mean()
+    plt.plot(df["Month"], df["Smoothed"], color="green", linestyle=":", label="Smoothed Trend")
+
+    # Annotate peak point
+    max_point = df.loc[df["NetIncome"].idxmax()]
+    plt.annotate(f"Peak: ${max_point['NetIncome']:,.0f}",
+                 (max_point["Month"], max_point["NetIncome"]),
+                 xytext=(10, 30), textcoords="offset points", arrowprops=dict(arrowstyle="->"))
+
+    plt.title("Financial Forecast Summary", fontsize=16, weight="bold")
+    plt.suptitle(f"Average Net Income (Next 3 Months): ${avg_next_3:,.2f}", fontsize=12, weight="bold", x=0.15, y=0.91)
     plt.xlabel("Month")
     plt.ylabel("Net Income ($)")
-    plt.title("Net Income Forecast")
     plt.legend()
-    plt.grid(True)
+    plt.grid(True, linestyle="--", alpha=0.5)
 
-    buffer = BytesIO()
-    plt.savefig(buffer, format="png")
-    buffer.seek(0)
-    img_base64 = base64.b64encode(buffer.read()).decode("utf-8")
+    # Save plot as base64 image for inline response
+    img = io.BytesIO()
+    plt.savefig(img, format="png", bbox_inches="tight")
+    img.seek(0)
+    img_base64 = base64.b64encode(img.read()).decode("utf-8")
     plt.close()
-    return img_base64
 
-
-# ---------------- Flask Routes ----------------
-
-@app.route("/")
-def dashboard():
-    forecast_data, avg_net_income = build_forecast(PERSISTENT_PNL)
-    chart_img = generate_chart(PERSISTENT_PNL, forecast_data)
-
-    # Build table rows for display
-    pnl_rows = "".join(
-        f"<tr><td>{row['Month']}</td><td>${row['Revenue']:,}</td>"
-        f"<td>${row['Expenses']:,}</td><td>${row['NetIncome']:,}</td></tr>"
-        for row in PERSISTENT_PNL
-    )
-
-    # Render HTML directly (keeps it simple — no external templates)
+    # Build HTML page
     html = f"""
     <html>
-    <head>
-        <title>Financial Dashboard</title>
-        <style>
-            body {{ font-family: Arial, sans-serif; margin: 40px; }}
-            h1 {{ font-size: 32px; }}
-            h2 {{ margin-top: 20px; }}
-            table {{
-                width: 100%; border-collapse: collapse; margin-top: 20px;
-            }}
-            table, th, td {{ border: 1px solid #ccc; }}
-            th, td {{ padding: 8px; text-align: center; }}
-            img {{ display: block; margin: 20px auto; max-width: 80%; }}
-        </style>
-    </head>
     <body>
-        <h1>Financial Forecast Summary</h1>
-        <h2>Average Net Income (Next 3 Months): ${avg_net_income:,.2f}</h2>
-        <img src="data:image/png;base64,{chart_img}" alt="Net Income Forecast Chart">
-        <h2>Monthly Profit & Loss</h2>
-        <table>
-            <tr><th>Month</th><th>Revenue</th><th>Expenses</th><th>Net Income</th></tr>
-            {pnl_rows}
-        </table>
+        <h2>Financial Forecast Summary</h2>
+        <p><b>{note}</b></p>
+        <img src="data:image/png;base64,{img_base64}" width="800"/>
+        <h3>Monthly Profit & Loss</h3>
+        {combined.to_html(index=False, justify="center")}
     </body>
     </html>
     """
-    return html
-
-
-@app.route("/pnl")
-def pnl_api():
-    """Returns raw Profit & Loss data as JSON."""
-    return jsonify({"data": PERSISTENT_PNL})
-
-
-@app.route("/forecast")
-def forecast_api():
-    """Returns 3-month forecast data and average net income as JSON."""
-    forecast_data, avg_net_income = build_forecast(PERSISTENT_PNL)
-    return jsonify({"forecast": forecast_data, "average_net_income": avg_net_income})
-
+    return Response(html, mimetype="text/html")
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
